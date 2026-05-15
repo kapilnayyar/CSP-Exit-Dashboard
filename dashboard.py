@@ -280,13 +280,11 @@ def render():
     u1_pending = u1["not_migrated"] + u1["in_process"]
     u2_not_team = u2["partner"] + u2["swu"]
 
-    updated = datetime.now(IST).strftime("%d-%b-%Y %H:%M")
-
     # ── Title bar ────────────────────────────────────────────────────────────
     st.markdown(
-        f'<div style="background:#1F4E78;color:#ffffff;padding:14px;border-radius:8px;'
-        f'font-size:17px;font-weight:bold;text-align:center;margin-bottom:6px">'
-        f'CSP EXIT STATUS &nbsp;|&nbsp; Snapshot as of {updated}</div>',
+        '<div style="background:#1F4E78;color:#ffffff;padding:14px;border-radius:8px;'
+        'font-size:17px;font-weight:bold;text-align:center;margin-bottom:6px">'
+        'CSP EXIT STATUS</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
