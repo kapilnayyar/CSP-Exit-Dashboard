@@ -1,0 +1,5 @@
+streamlit
+streamlit-autorefresh
+gspread
+google-auth
+python-dotenv
