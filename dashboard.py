@@ -633,9 +633,9 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     def r15_of(p):
         return r15_by_code.get(str(p.get("partner_code") or ""), 0)
 
-    # ── Cumulative pools ─────────────────────────────────────────────────────
+    # ── Cumulative pools (S1, S3) + current-state pools (S2) ─────────────────
     in_pipeline = [p for p in partners if p.get("current_state") in ("S1","S2","S3","S4","S5","S6")]
-    past_s2 = list(in_pipeline)  # all CSPs that have served notice period (R2/B2 rule removed)
+    current_s2 = by_state.get("S2", [])  # only CSPs currently serving notice
     past_s3 = [p for p in in_pipeline if p["current_state"] in ("S3","S4","S5","S6")]
 
     s1_csps = len(in_pipeline)
@@ -647,10 +647,10 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
         ("# Userbase (R15 active)", s1_userbase, "100.0%"),
     ]), unsafe_allow_html=True)
 
-    # ── S2 — Served notice (excl R2/B2) ──────────────────────────────────────
-    s2_csps = len(past_s2)
-    s2_userbase = sum(r15_of(p) for p in past_s2)
-    st.markdown(stage_card("STAGE 2  —  NOTICE PERIOD (served)", STAGE_COLORS["S2"], [
+    # ── S2 — Currently serving notice period ─────────────────────────────────
+    s2_csps = len(current_s2)
+    s2_userbase = sum(r15_of(p) for p in current_s2)
+    st.markdown(stage_card("STAGE 2  —  NOTICE PERIOD (currently serving)", STAGE_COLORS["S2"], [
         ("# CSPs", s2_csps, fmt_pct(s2_csps, s1_csps)),
         ("# Userbase (R15 active)", s2_userbase, fmt_pct(s2_userbase, s1_userbase)),
     ]), unsafe_allow_html=True)
@@ -663,41 +663,40 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
         ("# Userbase (R15 active)", s3_userbase, fmt_pct(s3_userbase, s1_userbase)),
     ]), unsafe_allow_html=True)
 
-    # ── S4a — Execution In Process (currently in S4) ─────────────────────────
+    # ── S4a — Execution Completed (currently in S5) ──────────────────────────
+    s5_partners = by_state.get("S5", [])
+    s4a_u1_mig = sum(u1_by.get(p["name"].lower(), {}).get("migrated", 0) for p in s5_partners)
+    s4a_u2_pick = sum(u2_picked.get(p["name"].lower(), 0) for p in s5_partners)
+    s4a_csps_completed = len(s5_partners)
+
+    st.markdown(stage_card("STAGE 4a  —  EXECUTION COMPLETED (currently in S5)", STAGE_COLORS["S4c"], [
+        ("# CSPs", s4a_csps_completed, fmt_pct(s4a_csps_completed, s1_csps)),
+        ("# U1 Migration Completed", s4a_u1_mig, fmt_pct(s4a_u1_mig, s1_userbase)),
+        ("# U2 Netbox Picked by Wiom", s4a_u2_pick, fmt_pct(s4a_u2_pick, s1_userbase)),
+    ]), unsafe_allow_html=True)
+
+    # ── S4b — Execution In Process (currently in S4) ─────────────────────────
     s4_partners = by_state.get("S4", [])
-    s4a_u1 = s4a_u1_mig = s4a_u2 = s4a_u2_pick = s4a_pending = 0
+    s4b_u1 = s4b_u1_mig = s4b_u2 = s4b_u2_pick = s4b_pending = 0
     for p in s4_partners:
         key = p["name"].lower()
         u1d = u1_by.get(key, {"total": 0, "migrated": 0})
-        s4a_u1 += u1d["total"]
-        s4a_u1_mig += u1d["migrated"]
-        s4a_u2 += u2_total.get(key, 0)
-        s4a_u2_pick += u2_picked.get(key, 0)
+        s4b_u1 += u1d["total"]
+        s4b_u1_mig += u1d["migrated"]
+        s4b_u2 += u2_total.get(key, 0)
+        s4b_u2_pick += u2_picked.get(key, 0)
         # If CSP has no sheet data, count its R15 active as "pending to add"
         if u1d["total"] == 0 and u2_total.get(key, 0) == 0:
-            s4a_pending += r15_of(p)
-    s4a_csps = len(s4_partners)
+            s4b_pending += r15_of(p)
+    s4b_csps = len(s4_partners)
 
-    st.markdown(stage_card("STAGE 4a  —  EXECUTION IN PROCESS (currently in S4)", STAGE_COLORS["S4a"], [
-        ("# CSPs", s4a_csps, fmt_pct(s4a_csps, s1_csps)),
-        ("# U1 Userbase (sheet)", s4a_u1, fmt_pct(s4a_u1, s1_userbase)),
-        ("# Migration Done", s4a_u1_mig, fmt_pct(s4a_u1_mig, s1_userbase)),
-        ("# U2 Userbase (sheet)", s4a_u2, fmt_pct(s4a_u2, s1_userbase)),
-        ("# Netbox Pickup Done", s4a_u2_pick, fmt_pct(s4a_u2_pick, s1_userbase)),
-        ("# Userbase Pending to Add (R15)", s4a_pending, fmt_pct(s4a_pending, s1_userbase)),
-    ]), unsafe_allow_html=True)
-
-    # ── S4b — Execution Completed (currently in S5) ──────────────────────────
-    s5_partners = by_state.get("S5", [])
-    s4b_u1_mig = sum(u1_by.get(p["name"].lower(), {}).get("migrated", 0) for p in s5_partners)
-    s4b_u2_pick = sum(u2_picked.get(p["name"].lower(), 0) for p in s5_partners)
-    s4b_csps = len(s5_partners)
-    s4b_userbase = s4b_u1_mig + s4b_u2_pick
-
-    st.markdown(stage_card("STAGE 4b  —  EXECUTION COMPLETED (currently in S5)", STAGE_COLORS["S4c"], [
+    st.markdown(stage_card("STAGE 4b  —  EXECUTION IN PROCESS (currently in S4)", STAGE_COLORS["S4a"], [
         ("# CSPs", s4b_csps, fmt_pct(s4b_csps, s1_csps)),
-        ("# U1 Migration Completed", s4b_u1_mig, fmt_pct(s4b_u1_mig, s1_userbase)),
-        ("# U2 Netbox Picked by Wiom", s4b_u2_pick, fmt_pct(s4b_u2_pick, s1_userbase)),
+        ("# U1 Userbase (sheet)", s4b_u1, fmt_pct(s4b_u1, s1_userbase)),
+        ("# Migration Done", s4b_u1_mig, fmt_pct(s4b_u1_mig, s1_userbase)),
+        ("# U2 Userbase (sheet)", s4b_u2, fmt_pct(s4b_u2, s1_userbase)),
+        ("# Netbox Pickup Done", s4b_u2_pick, fmt_pct(s4b_u2_pick, s1_userbase)),
+        ("# Userbase Pending to Add (R15)", s4b_pending, fmt_pct(s4b_pending, s1_userbase)),
     ]), unsafe_allow_html=True)
 
     # ── S5 — Reconciliation (Netbox metrics) ─────────────────────────────────
