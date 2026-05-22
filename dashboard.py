@@ -195,13 +195,20 @@ def metabase_safe_in_list(names):
     return ", ".join("'" + str(n).replace("'", "''") + "'" for n in names)
 
 
+def metabase_id_in_list(codes):
+    """Build a SQL IN-clause string from numeric partner_account_ids (no quotes)."""
+    return ", ".join(str(c) for c in codes if c)
+
+
 @st.cache_data(ttl=300)
-def fetch_r15_active_by_partner(metabase_url, api_key, partner_names):
-    """Return {partner_name: active_r15_count} for the given partner list."""
-    if not partner_names:
+def fetch_r15_active_by_code(metabase_url, api_key, partner_codes):
+    """Return {partner_code: active_r15_count} — matches on unique partner_account_id."""
+    if not partner_codes:
         return {}
-    in_list = metabase_safe_in_list(partner_names)
-    sql = f"""SELECT sm.partner_name, COUNT(DISTINCT c.account_id) AS active_r15
+    in_list = metabase_id_in_list(partner_codes)
+    if not in_list:
+        return {}
+    sql = f"""SELECT sm.partner_account_id, COUNT(DISTINCT c.account_id) AS active_r15
 FROM prod_db.public.t_router_user_mapping a
 JOIN t_wg_customer c ON a.router_nas_id = c.nasid
 JOIN supply_model sm ON c.lco_account_id = sm.partner_account_id
@@ -210,52 +217,53 @@ WHERE a.auth_state = 1
   AND a.mobile > '5999999999' AND a.device_limit = 10
   AND CAST(a.otp_expiry_time AS DATE) >= DATEADD(day, -15, CURRENT_DATE)
   AND CURRENT_DATE >= CAST(a.otp_issued_time AS DATE)
-  AND sm.partner_name IN ({in_list})
+  AND sm.partner_account_id IN ({in_list})
 GROUP BY 1"""
     res = metabase_query(metabase_url, api_key, sql)
-    return {row[0]: row[1] for row in res["rows"]}
+    return {str(row[0]): row[1] for row in res["rows"]}
 
 
 @st.cache_data(ttl=300)
-def fetch_idle_devices_total(metabase_url, api_key, partner_names):
-    """Return total IDLE devices summed across given partners (= Netbox at CSPs)."""
-    if not partner_names:
+def fetch_idle_devices_total(metabase_url, api_key, partner_codes):
+    """Return total IDLE devices summed across given partner_codes (= Netbox at CSPs)."""
+    if not partner_codes:
         return 0
-    in_list = metabase_safe_in_list(partner_names)
+    in_list = metabase_id_in_list(partner_codes)
+    if not in_list:
+        return 0
     sql = f"""SELECT COUNT(*) AS total
 FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
-JOIN supply_model sm ON sm.partner_account_id = td."LCO_ACCOUNT_ID"
-WHERE td."STATUS" = 'IDLE' AND sm.partner_name IN ({in_list})"""
+WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" IN ({in_list})"""
     res = metabase_query(metabase_url, api_key, sql)
     return res["rows"][0][0] if res["rows"] else 0
 
 
 @st.cache_data(ttl=300)
-def search_devices_at_partner(metabase_url, api_key, partner_name):
-    """Tab 4 search 1 — list of IDLE devices for a partner."""
+def search_devices_at_partner(metabase_url, api_key, partner_code):
+    """Tab 4 search 1 — list of IDLE devices for a partner (by partner_account_id)."""
     sql = f"""SELECT td."DEVICE_ID", td."MAC", td."SERIAL", td."MODEL", td."STATUS", td."ADDED_TIME"
 FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
-JOIN supply_model sm ON sm.partner_account_id = td."LCO_ACCOUNT_ID"
-WHERE td."STATUS" = 'IDLE' AND sm.partner_name = '{partner_name.replace("'", "''")}'
+WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" = {int(partner_code)}
 ORDER BY td."ADDED_TIME" DESC"""
     return metabase_query(metabase_url, api_key, sql)
 
 
 @st.cache_data(ttl=300)
-def fetch_idle_nas_by_partner(metabase_url, api_key, partner_names):
-    """For each partner, return a set of NAS_IDs currently in IDLE state."""
-    if not partner_names:
+def fetch_idle_nas_by_code(metabase_url, api_key, partner_codes):
+    """For each partner_code, return a set of NAS_IDs currently in IDLE state."""
+    if not partner_codes:
         return {}
-    in_list = metabase_safe_in_list(partner_names)
-    sql = f"""SELECT sm.partner_name, td."NASID"
+    in_list = metabase_id_in_list(partner_codes)
+    if not in_list:
+        return {}
+    sql = f"""SELECT td."LCO_ACCOUNT_ID", td."NASID"
 FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
-JOIN supply_model sm ON sm.partner_account_id = td."LCO_ACCOUNT_ID"
-WHERE td."STATUS" = 'IDLE' AND sm.partner_name IN ({in_list})
+WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" IN ({in_list})
   AND td."NASID" IS NOT NULL"""
     res = metabase_query(metabase_url, api_key, sql)
     out = defaultdict(set)
     for row in res["rows"]:
-        out[row[0]].add(str(row[1]))
+        out[str(row[0])].add(str(row[1]))
     return out
 
 
@@ -277,8 +285,8 @@ QUALIFY ROW_NUMBER() OVER (PARTITION BY mobile ORDER BY created_on DESC NULLS LA
 
 
 @st.cache_data(ttl=300)
-def search_active_userbase(metabase_url, api_key, partner_name):
-    """Tab 4 search 2 — list of active R15 customers (mobile + netbox device_id) for a partner."""
+def search_active_userbase(metabase_url, api_key, partner_code):
+    """Tab 4 search 2 — list of active R15 customers for a partner (by partner_account_id)."""
     sql = f"""SELECT
   a.mobile,
   c.device_id AS netbox_id,
@@ -286,13 +294,12 @@ def search_active_userbase(metabase_url, api_key, partner_name):
   CAST(a.otp_expiry_time AS DATE) AS plan_expiry
 FROM prod_db.public.t_router_user_mapping a
 JOIN t_wg_customer c ON a.router_nas_id = c.nasid
-JOIN supply_model sm ON c.lco_account_id = sm.partner_account_id
 WHERE a.auth_state = 1
   AND a.otp NOT IN ('FREE','PAY_ONLINE','CASH','ROAM')
   AND a.mobile > '5999999999' AND a.device_limit = 10
   AND CAST(a.otp_expiry_time AS DATE) >= DATEADD(day, -15, CURRENT_DATE)
   AND CURRENT_DATE >= CAST(a.otp_issued_time AS DATE)
-  AND sm.partner_name = '{partner_name.replace("'", "''")}'
+  AND c.lco_account_id = {int(partner_code)}
 ORDER BY plan_expiry DESC"""
     return metabase_query(metabase_url, api_key, sql)
 
@@ -777,7 +784,7 @@ def render_tab4_search(partners, u2_rows, secrets):
     if p1:
         st.write(f"**{p1['name']}** · Code: `{p1.get('partner_code','')}` · State: `{p1['current_state']}`")
         with st.spinner("Querying Metabase..."):
-            res = search_devices_at_partner(secrets["metabase_url"], secrets["metabase_key"], p1["name"])
+            res = search_devices_at_partner(secrets["metabase_url"], secrets["metabase_key"], p1["partner_code"])
         if res.get("error"):
             st.error(f"Metabase error: {res['error']}")
         elif res["rows"]:
@@ -795,7 +802,7 @@ def render_tab4_search(partners, u2_rows, secrets):
     if p2:
         st.write(f"**{p2['name']}** · Code: `{p2.get('partner_code','')}` · State: `{p2['current_state']}`")
         with st.spinner("Querying Metabase..."):
-            res = search_active_userbase(secrets["metabase_url"], secrets["metabase_key"], p2["name"])
+            res = search_active_userbase(secrets["metabase_url"], secrets["metabase_key"], p2["partner_code"])
         if res.get("error"):
             st.error(f"Metabase error: {res['error']}")
         elif res["rows"]:
@@ -859,23 +866,30 @@ def render():
     u1 = classify_u1(u1_rows)
     u1_by, u2_total, u2_picked = build_sheet_lookups(u1_rows, u2_rows)
 
-    # Pre-fetch R15 (S2 + S3 + S4-without-sheet + S5-without-sheet) and idle device totals
-    s2_s3_names = [p["name"] for p in partners if p["current_state"] in ("S2", "S3")]
-    s4_zero = [p["name"] for p in partners if p["current_state"] == "S4"
-               and (u1_by.get(p["name"].lower(), {}).get("total", 0) == 0)
-               and (u2_total.get(p["name"].lower(), 0) == 0)]
-    s5_zero = [p["name"] for p in partners if p["current_state"] == "S5"
-               and (u1_by.get(p["name"].lower(), {}).get("total", 0) == 0)
-               and (u2_total.get(p["name"].lower(), 0) == 0)]
-    s5_all = [p["name"] for p in partners if p["current_state"] == "S5"]
-    s5_all_lower = {n.lower() for n in s5_all}
+    # Use partner_code (= Metabase partner_account_id) as the unique join key.
+    # partner_name is NOT unique in supply_model — terminated + new partners can share a name.
+    def code_of(p): return p.get("partner_code")
 
-    r15_by = fetch_r15_active_by_partner(
+    s2_s3_codes = [code_of(p) for p in partners if p["current_state"] in ("S2", "S3")]
+    s4_zero_codes = [code_of(p) for p in partners if p["current_state"] == "S4"
+                     and (u1_by.get(p["name"].lower(), {}).get("total", 0) == 0)
+                     and (u2_total.get(p["name"].lower(), 0) == 0)]
+    s5_zero_codes = [code_of(p) for p in partners if p["current_state"] == "S5"
+                     and (u1_by.get(p["name"].lower(), {}).get("total", 0) == 0)
+                     and (u2_total.get(p["name"].lower(), 0) == 0)]
+    s5_all_codes = [code_of(p) for p in partners if p["current_state"] == "S5"]
+    s5_all_lower = {p["name"].lower() for p in partners if p["current_state"] == "S5"}
+    code_to_name = {str(p["partner_code"]): p["name"] for p in partners if p.get("partner_code")}
+    name_to_code = {p["name"]: p.get("partner_code") for p in partners if p.get("partner_code")}
+
+    r15_by_code = fetch_r15_active_by_code(
         secrets["metabase_url"], secrets["metabase_key"],
-        s2_s3_names + s4_zero + s5_zero,
+        s2_s3_codes + s4_zero_codes + s5_zero_codes,
     )
+    # Map back to name for downstream use
+    r15_by = {code_to_name.get(code, code): cnt for code, cnt in r15_by_code.items()}
     idle_total = fetch_idle_devices_total(
-        secrets["metabase_url"], secrets["metabase_key"], s5_all,
+        secrets["metabase_url"], secrets["metabase_key"], s5_all_codes,
     )
 
     # ── S5 dedup: U2 pending customers whose netbox is already IDLE at CSP ───
@@ -891,20 +905,22 @@ def render():
             if str(r.get("Remarks Dropdown") or "").strip().lower() == "device picked up": continue
             pending_pairs.append((str(mobile).strip(), partner))
 
-        # Get NAS_ID per mobile + IDLE NAS sets per partner
+        # Get NAS_ID per mobile + IDLE NAS sets per partner (keyed by partner_code)
         all_mobiles = list({m for m, _ in pending_pairs})
         mobile_to_nas = fetch_mobile_to_nas(
             secrets["metabase_url"], secrets["metabase_key"], all_mobiles,
         ) if all_mobiles else {}
-        idle_nas_by_partner = fetch_idle_nas_by_partner(
-            secrets["metabase_url"], secrets["metabase_key"], s5_all,
+        idle_nas_by_code = fetch_idle_nas_by_code(
+            secrets["metabase_url"], secrets["metabase_key"], s5_all_codes,
         )
 
         # Count duplicates: pending customer's NAS_ID is in IDLE set at their partner
         dup = 0
         for mobile, partner in pending_pairs:
             nas = mobile_to_nas.get(mobile)
-            if nas and nas in idle_nas_by_partner.get(partner, set()):
+            code = name_to_code.get(partner)
+            if not nas or not code: continue
+            if nas in idle_nas_by_code.get(str(code), set()):
                 dup += 1
         s5_dedup["duplicates"] = dup
 
