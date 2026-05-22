@@ -280,18 +280,13 @@ QUALIFY ROW_NUMBER() OVER (PARTITION BY mobile ORDER BY created_on DESC NULLS LA
 def search_active_userbase(metabase_url, api_key, partner_name):
     """Tab 4 search 2 — list of active R15 customers (mobile + netbox device_id) for a partner."""
     sql = f"""SELECT
-  c.account_id AS customer_account_id,
   a.mobile,
-  td."DEVICE_ID" AS netbox_id,
-  td."MAC" AS netbox_mac,
-  td."SERIAL" AS netbox_serial,
+  c.device_id AS netbox_id,
   CAST(a.otp_issued_time AS DATE) AS plan_start,
   CAST(a.otp_expiry_time AS DATE) AS plan_expiry
 FROM prod_db.public.t_router_user_mapping a
 JOIN t_wg_customer c ON a.router_nas_id = c.nasid
 JOIN supply_model sm ON c.lco_account_id = sm.partner_account_id
-LEFT JOIN "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
-       ON td."NASID" = a.router_nas_id
 WHERE a.auth_state = 1
   AND a.otp NOT IN ('FREE','PAY_ONLINE','CASH','ROAM')
   AND a.mobile > '5999999999' AND a.device_limit = 10
