@@ -688,13 +688,14 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
         ("# Userbase (sheet, R15 fallback)", s3_userbase, fmt_pct(s3_userbase, s1_userbase)),
     ]), unsafe_allow_html=True)
 
-    # ── S4a — Execution Completed (currently in S5) ──────────────────────────
+    # ── S4a — Execution Completed (currently in S5 or S6) ────────────────────
     s5_partners = by_state.get("S5", [])
-    s4a_u1_mig = sum(u1_by.get(p["name"].lower(), {}).get("migrated", 0) for p in s5_partners)
-    s4a_u2_pick = sum(u2_picked.get(p["name"].lower(), 0) for p in s5_partners)
-    s4a_csps_completed = len(s5_partners)
+    completed_partners = s5_partners + by_state.get("S6", [])
+    s4a_u1_mig = sum(u1_by.get(p["name"].lower(), {}).get("migrated", 0) for p in completed_partners)
+    s4a_u2_pick = sum(u2_picked.get(p["name"].lower(), 0) for p in completed_partners)
+    s4a_csps_completed = len(completed_partners)
 
-    st.markdown(stage_card("STAGE 4a  —  EXECUTION COMPLETED (currently in S5)", STAGE_COLORS["S4c"], [
+    st.markdown(stage_card("STAGE 4a  —  EXECUTION COMPLETED (currently in S5 or S6)", STAGE_COLORS["S4c"], [
         ("# CSPs", s4a_csps_completed, fmt_pct(s4a_csps_completed, s1_csps)),
         ("# U1 Migration Completed", s4a_u1_mig, fmt_pct(s4a_u1_mig, s1_userbase)),
         ("# U2 Netbox Picked by Wiom", s4a_u2_pick, fmt_pct(s4a_u2_pick, s1_userbase)),
