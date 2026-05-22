@@ -633,34 +633,46 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     def r15_of(p):
         return r15_by_code.get(str(p.get("partner_code") or ""), 0)
 
+    def sheet_userbase_of(p):
+        """U1+U2 total for this partner from Google Sheet (0 if not in sheet)."""
+        key = p["name"].lower()
+        u1 = u1_by.get(key, {}).get("total", 0) or 0
+        u2 = u2_total.get(key, 0) or 0
+        return u1 + u2
+
+    def userbase_of(p):
+        """Sheet first; R15 fallback when CSP is not in sheet."""
+        sheet = sheet_userbase_of(p)
+        return sheet if sheet > 0 else r15_of(p)
+
     # ── Cumulative pools (S1, S3) + current-state pools (S2) ─────────────────
     in_pipeline = [p for p in partners if p.get("current_state") in ("S1","S2","S3","S4","S5","S6")]
     current_s2 = by_state.get("S2", [])  # only CSPs currently serving notice
     past_s3 = [p for p in in_pipeline if p["current_state"] in ("S3","S4","S5","S6")]
 
     s1_csps = len(in_pipeline)
-    s1_userbase = sum(r15_of(p) for p in in_pipeline)
+    s1_userbase = sum(userbase_of(p) for p in in_pipeline)
 
     # ── S1 — Total in exit ───────────────────────────────────────────────────
     st.markdown(stage_card("STAGE 1  —  EXIT DECLARED (total in exit pipeline)", STAGE_COLORS["S1"], [
         ("# CSPs", s1_csps, "100.0%"),
-        ("# Userbase (R15 active)", s1_userbase, "100.0%"),
+        ("# Userbase (sheet, R15 fallback)", s1_userbase, "100.0%"),
     ]), unsafe_allow_html=True)
 
     # ── S2 — Currently serving notice period ─────────────────────────────────
     s2_csps = len(current_s2)
-    s2_userbase = sum(r15_of(p) for p in current_s2)
+    s2_userbase = sum(userbase_of(p) for p in current_s2)
     st.markdown(stage_card("STAGE 2  —  NOTICE PERIOD (currently serving)", STAGE_COLORS["S2"], [
         ("# CSPs", s2_csps, fmt_pct(s2_csps, s1_csps)),
-        ("# Userbase (R15 active)", s2_userbase, fmt_pct(s2_userbase, s1_userbase)),
+        ("# Userbase (sheet, R15 fallback)", s2_userbase, fmt_pct(s2_userbase, s1_userbase)),
     ]), unsafe_allow_html=True)
 
     # ── S3 — Got blocked ─────────────────────────────────────────────────────
     s3_csps = len(past_s3)
-    s3_userbase = sum(r15_of(p) for p in past_s3)
+    s3_userbase = sum(userbase_of(p) for p in past_s3)
     st.markdown(stage_card("STAGE 3  —  BLOCKING (got blocked, includes past)", STAGE_COLORS["S3"], [
         ("# CSPs", s3_csps, fmt_pct(s3_csps, s1_csps)),
-        ("# Userbase (R15 active)", s3_userbase, fmt_pct(s3_userbase, s1_userbase)),
+        ("# Userbase (sheet, R15 fallback)", s3_userbase, fmt_pct(s3_userbase, s1_userbase)),
     ]), unsafe_allow_html=True)
 
     # ── S4a — Execution Completed (currently in S5) ──────────────────────────
