@@ -29,6 +29,17 @@ IST = ZoneInfo("Asia/Kolkata")
 
 ALLOWED_DOMAINS = ("@wiom.in",)
 
+# Partner codes excluded from the dashboard (per-CSP exceptions).
+# These are dropped at the data-fetch boundary so they don't appear in any tab.
+EXCLUDED_PARTNER_CODES = {
+    281749854653857,
+    281749854733209,
+    274877909399,
+    274877951823,
+    281749854674788,
+    281749854632442,
+}
+
 _TOKEN_SALT = "csp-exit-wiom-dashboard-2026"
 
 
@@ -137,6 +148,8 @@ def fetch_partners(supabase_url, supabase_key):
         d = de.get(p["id"], {})
         p["u1_count"] = d.get("u1_count") or 0
         p["u2_count"] = d.get("u2_count") or 0
+    # Drop excluded partners (per-CSP exceptions list)
+    partners = [p for p in partners if int(p.get("partner_code") or 0) not in EXCLUDED_PARTNER_CODES]
     return partners
 
 
