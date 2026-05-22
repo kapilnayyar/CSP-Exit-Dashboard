@@ -635,7 +635,7 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
 
     # ── Cumulative pools ─────────────────────────────────────────────────────
     in_pipeline = [p for p in partners if p.get("current_state") in ("S1","S2","S3","S4","S5","S6")]
-    past_s2 = [p for p in in_pipeline if str(p.get("risk_state") or "").upper() != "R2"]
+    past_s2 = list(in_pipeline)  # all CSPs that have served notice period (R2/B2 rule removed)
     past_s3 = [p for p in in_pipeline if p["current_state"] in ("S3","S4","S5","S6")]
 
     s1_csps = len(in_pipeline)
@@ -650,7 +650,7 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     # ── S2 — Served notice (excl R2/B2) ──────────────────────────────────────
     s2_csps = len(past_s2)
     s2_userbase = sum(r15_of(p) for p in past_s2)
-    st.markdown(stage_card("STAGE 2  —  NOTICE PERIOD (served, except R2/B2)", STAGE_COLORS["S2"], [
+    st.markdown(stage_card("STAGE 2  —  NOTICE PERIOD (served)", STAGE_COLORS["S2"], [
         ("# CSPs", s2_csps, fmt_pct(s2_csps, s1_csps)),
         ("# Userbase (R15 active)", s2_userbase, fmt_pct(s2_userbase, s1_userbase)),
     ]), unsafe_allow_html=True)
