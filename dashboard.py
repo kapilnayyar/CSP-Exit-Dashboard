@@ -709,18 +709,15 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     s5_could_not_pick = max(s5_could_not_pick_raw - dup, 0)
     s5_liability = idle_total + s5_could_not_pick
 
-    # S5 %: mixed denominators with inline labels so the reader sees WHAT the % is "of".
-    def pct_of(n, d, label):
-        return f"{fmt_pct(n, d)} (of {label})" if d else ""
-
     st.markdown(stage_card("STAGE 5  —  RECONCILIATION (Netbox cleanup)", STAGE_COLORS["S5"], [
-        ("# CSPs", len(s5_partners), pct_of(len(s5_partners), s1_csps, "S1 CSPs")),
-        ("# Netbox at CSPs (Metabase IDLE)", idle_total, pct_of(idle_total, s5_liability, "Liability")),
-        ("# Could not pick — raw (U1+U2 pending)", s5_could_not_pick_raw, pct_of(s5_could_not_pick_raw, s5_liability, "Liability")),
-        ("# Duplicates — U2 (pending customer's netbox already at CSP)", dup, pct_of(dup, s5_could_not_pick_raw, "Raw Pending")),
-        ("# Could not pick — deduped", s5_could_not_pick, pct_of(s5_could_not_pick, s5_liability, "Liability")),
-        ("# Total Netbox Liability", s5_liability, "100.0% (whole)"),
+        ("# CSPs", len(s5_partners), fmt_pct(len(s5_partners), s1_csps)),
+        ("# Netbox at CSPs (Metabase IDLE)", idle_total, fmt_pct(idle_total, s5_liability)),
+        ("# Could not pick — raw (U1+U2 pending)", s5_could_not_pick_raw, fmt_pct(s5_could_not_pick_raw, s5_liability)),
+        ("# Duplicates — U2 (pending customer's netbox already at CSP)", dup, fmt_pct(dup, s5_could_not_pick_raw)),
+        ("# Could not pick — deduped", s5_could_not_pick, fmt_pct(s5_could_not_pick, s5_liability)),
+        ("# Total Netbox Liability", s5_liability, "100.0%"),
     ]), unsafe_allow_html=True)
+    st.caption("S5 % logic: row 1 = of S1 CSPs · rows 2/3/5 = of Total Liability · row 4 = of Raw Pending · row 6 = whole")
 
     # ── S6 — Complete ────────────────────────────────────────────────────────
     s6_csps = len(by_state.get("S6", []))
