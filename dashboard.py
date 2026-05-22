@@ -589,7 +589,8 @@ STAGE_COLORS = {
 
 
 def stage_card(stage_label, color, metrics):
-    """Render one funnel stage in Tab 1's table style: colored header + S.No / Category / Count."""
+    """Render one funnel stage: colored header + 4-column table (S.No / Category / Count / %).
+    metrics is a list of (label, value, percent_string). Pass percent_string="" or None to hide."""
     html = (
         f'<div style="background:{color};color:#ffffff;padding:10px 14px;'
         f'font-weight:bold;font-size:14px;margin-top:14px;border-radius:6px 6px 0 0">'
@@ -598,99 +599,105 @@ def stage_card(stage_label, color, metrics):
         '<tr>'
         '<th style="background:#2E75B6;color:#ffffff;width:60px">S.No</th>'
         '<th style="background:#2E75B6;color:#ffffff">Category</th>'
-        '<th style="background:#2E75B6;color:#ffffff;width:140px;text-align:right">Count</th>'
+        '<th style="background:#2E75B6;color:#ffffff;width:120px;text-align:right">Count</th>'
+        '<th style="background:#2E75B6;color:#ffffff;width:80px;text-align:right">%</th>'
         '</tr>'
     )
-    for i, (label, value) in enumerate(metrics, start=1):
+    for i, item in enumerate(metrics, start=1):
+        label, value, pct_str = item if len(item) == 3 else (item[0], item[1], "")
         v_str = f"{value:,}" if isinstance(value, int) else str(value)
         html += (
             f'<tr>'
             f'<td style="background:#ffffff;color:#000000;text-align:center">{i}</td>'
             f'<td style="background:#ffffff;color:#000000">{label}</td>'
             f'<td style="background:#ffffff;color:#000000;text-align:right;font-weight:bold">{v_str}</td>'
+            f'<td style="background:#ffffff;color:#000000;text-align:right">{pct_str or ""}</td>'
             f'</tr>'
         )
     html += "</table>"
     return html
 
 
-def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by, idle_total, s5_dedup):
-    """Tab 2 — the 7-stage funnel of mutually exclusive current-state cards."""
-    # Group partners by current_state
+def fmt_pct(n, denom):
+    if not denom: return ""
+    return f"{(n / denom * 100):.1f}%"
+
+
+def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup):
+    """Tab 2 — funnel. S1/S2/S3 are cumulative; S4a/S4b/S5/S6 are current snapshots.
+    % computed against S1 totals."""
     by_state = defaultdict(list)
     for p in partners:
         by_state[p["current_state"]].append(p)
 
-    # ── S1 ───────────────────────────────────────────────────────────────────
-    s1_csps = len(by_state.get("S1", []))
-    st.markdown(stage_card("STAGE 1  —  EXIT DECLARED", STAGE_COLORS["S1"], [
-        ("# CSPs", s1_csps), ("# Userbase", 0),
+    def r15_of(p):
+        return r15_by_code.get(str(p.get("partner_code") or ""), 0)
+
+    # ── Cumulative pools ─────────────────────────────────────────────────────
+    in_pipeline = [p for p in partners if p.get("current_state") in ("S1","S2","S3","S4","S5","S6")]
+    past_s2 = [p for p in in_pipeline if str(p.get("risk_state") or "").upper() != "R2"]
+    past_s3 = [p for p in in_pipeline if p["current_state"] in ("S3","S4","S5","S6")]
+
+    s1_csps = len(in_pipeline)
+    s1_userbase = sum(r15_of(p) for p in in_pipeline)
+
+    # ── S1 — Total in exit ───────────────────────────────────────────────────
+    st.markdown(stage_card("STAGE 1  —  EXIT DECLARED (total in exit pipeline)", STAGE_COLORS["S1"], [
+        ("# CSPs", s1_csps, "100.0%"),
+        ("# Userbase (R15 active)", s1_userbase, "100.0%"),
     ]), unsafe_allow_html=True)
 
-    # ── S2 ───────────────────────────────────────────────────────────────────
-    s2_partners = by_state.get("S2", [])
-    s2_userbase = sum(r15_by.get(p["name"], 0) for p in s2_partners)
-    st.markdown(stage_card("STAGE 2  —  NOTICE PERIOD", STAGE_COLORS["S2"], [
-        ("# CSPs", len(s2_partners)),
-        ("# Userbase (R15 active)", s2_userbase),
+    # ── S2 — Served notice (excl R2/B2) ──────────────────────────────────────
+    s2_csps = len(past_s2)
+    s2_userbase = sum(r15_of(p) for p in past_s2)
+    st.markdown(stage_card("STAGE 2  —  NOTICE PERIOD (served, except R2/B2)", STAGE_COLORS["S2"], [
+        ("# CSPs", s2_csps, fmt_pct(s2_csps, s1_csps)),
+        ("# Userbase (R15 active)", s2_userbase, fmt_pct(s2_userbase, s1_userbase)),
     ]), unsafe_allow_html=True)
 
-    # ── S3 ───────────────────────────────────────────────────────────────────
-    s3_partners = by_state.get("S3", [])
-    s3_userbase = sum(r15_by.get(p["name"], 0) for p in s3_partners)
-    st.markdown(stage_card("STAGE 3  —  BLOCKING", STAGE_COLORS["S3"], [
-        ("# CSPs", len(s3_partners)),
-        ("# Userbase (R15 active)", s3_userbase),
+    # ── S3 — Got blocked ─────────────────────────────────────────────────────
+    s3_csps = len(past_s3)
+    s3_userbase = sum(r15_of(p) for p in past_s3)
+    st.markdown(stage_card("STAGE 3  —  BLOCKING (got blocked, includes past)", STAGE_COLORS["S3"], [
+        ("# CSPs", s3_csps, fmt_pct(s3_csps, s1_csps)),
+        ("# Userbase (R15 active)", s3_userbase, fmt_pct(s3_userbase, s1_userbase)),
     ]), unsafe_allow_html=True)
 
-    # ── S4 aggregates ────────────────────────────────────────────────────────
+    # ── S4a — Execution In Process (currently in S4) ─────────────────────────
     s4_partners = by_state.get("S4", [])
-    # S4a — all S4 CSPs; aggregate U1/U2 from sheet + pending-to-add from Metabase R15
     s4a_u1 = s4a_u2 = s4a_pending = 0
-    # S4b — only CSPs that have sheet data
-    s4b_csps = 0
-    s4b_u1 = s4b_u1_mig = s4b_u2 = s4b_u2_pick = 0
     for p in s4_partners:
         key = p["name"].lower()
         u1d = u1_by.get(key, {"total": 0, "migrated": 0})
-        t1 = u1d["total"]; m1 = u1d["migrated"]
-        t2 = u2_total.get(key, 0); p2 = u2_picked.get(key, 0)
-        s4a_u1 += t1; s4a_u2 += t2
-        in_sheet = t1 > 0 or t2 > 0
-        if in_sheet:
-            s4b_csps += 1
-            s4b_u1 += t1; s4b_u1_mig += m1; s4b_u2 += t2; s4b_u2_pick += p2
-        else:
-            # CSP missing from sheet — pending userbase comes from Metabase R15
-            s4a_pending += r15_by.get(p["name"], 0)
+        s4a_u1 += u1d["total"]
+        s4a_u2 += u2_total.get(key, 0)
+        # If CSP has no sheet data, count its R15 active as "pending to add"
+        if u1d["total"] == 0 and u2_total.get(key, 0) == 0:
+            s4a_pending += r15_of(p)
+    s4a_csps = len(s4_partners)
+    s4a_userbase = s4a_u1 + s4a_u2
 
-    st.markdown(stage_card("STAGE 4a  —  EXECUTION BEGUN", STAGE_COLORS["S4a"], [
-        ("# CSPs", len(s4_partners)),
-        ("# U1 Userbase", s4a_u1),
-        ("# U2 Userbase", s4a_u2),
-        ("# Userbase Pending to Add (R15)", s4a_pending),
+    st.markdown(stage_card("STAGE 4a  —  EXECUTION IN PROCESS (currently in S4)", STAGE_COLORS["S4a"], [
+        ("# CSPs", s4a_csps, fmt_pct(s4a_csps, s1_csps)),
+        ("# U1 Userbase (sheet)", s4a_u1, fmt_pct(s4a_u1, s1_userbase)),
+        ("# U2 Userbase (sheet)", s4a_u2, fmt_pct(s4a_u2, s1_userbase)),
+        ("# Userbase Pending to Add (R15)", s4a_pending, fmt_pct(s4a_pending, s1_userbase)),
     ]), unsafe_allow_html=True)
 
-    st.markdown(stage_card("STAGE 4b  —  EXECUTION IN PROCESS", STAGE_COLORS["S4b"], [
-        ("# CSPs", s4b_csps),
-        ("# U1 Count", s4b_u1),
-        ("# Migration Done", s4b_u1_mig),
-        ("# U2 Count", s4b_u2),
-        ("# Netbox Pickup Done", s4b_u2_pick),
-    ]), unsafe_allow_html=True)
-
-    # ── S4c: CSPs that already moved to S5 — execution complete ──────────────
+    # ── S4b — Execution Completed (currently in S5) ──────────────────────────
     s5_partners = by_state.get("S5", [])
-    s4c_u1_mig = sum(u1_by.get(p["name"].lower(), {}).get("migrated", 0) for p in s5_partners)
-    s4c_u2_pick = sum(u2_picked.get(p["name"].lower(), 0) for p in s5_partners)
-    st.markdown(stage_card("STAGE 4c  —  EXECUTION COMPLETED (CSPs now in S5)", STAGE_COLORS["S4c"], [
-        ("# CSPs", len(s5_partners)),
-        ("# U1 Migration Completed", s4c_u1_mig),
-        ("# U2 Netbox Picked by Wiom", s4c_u2_pick),
+    s4b_u1_mig = sum(u1_by.get(p["name"].lower(), {}).get("migrated", 0) for p in s5_partners)
+    s4b_u2_pick = sum(u2_picked.get(p["name"].lower(), 0) for p in s5_partners)
+    s4b_csps = len(s5_partners)
+    s4b_userbase = s4b_u1_mig + s4b_u2_pick
+
+    st.markdown(stage_card("STAGE 4b  —  EXECUTION COMPLETED (currently in S5)", STAGE_COLORS["S4c"], [
+        ("# CSPs", s4b_csps, fmt_pct(s4b_csps, s1_csps)),
+        ("# U1 Migration Completed", s4b_u1_mig, fmt_pct(s4b_u1_mig, s1_userbase)),
+        ("# U2 Netbox Picked by Wiom", s4b_u2_pick, fmt_pct(s4b_u2_pick, s1_userbase)),
     ]), unsafe_allow_html=True)
 
-    # ── S5 ───────────────────────────────────────────────────────────────────
-    s5_partners = by_state.get("S5", [])
+    # ── S5 — Reconciliation (Netbox metrics) ─────────────────────────────────
     s5_u1_total = s5_u1_mig = s5_u2_total = s5_u2_picked = 0
     for p in s5_partners:
         key = p["name"].lower()
@@ -702,20 +709,20 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by, idle_total,
     s5_could_not_pick = max(s5_could_not_pick_raw - dup, 0)
     s5_liability = idle_total + s5_could_not_pick
 
-    st.markdown(stage_card("STAGE 5  —  INITIATED (Final reconciliation)", STAGE_COLORS["S5"], [
-        ("# CSPs", len(s5_partners)),
-        ("# Netbox at CSPs (Metabase IDLE)", idle_total),
-        ("# Could not pick — raw (U1+U2 pending)", s5_could_not_pick_raw),
-        ("# Duplicates — U2 (pending customer's netbox already at CSP)", dup),
-        ("# Could not pick — deduped", s5_could_not_pick),
-        ("# Total Netbox Liability", s5_liability),
+    st.markdown(stage_card("STAGE 5  —  RECONCILIATION (Netbox cleanup)", STAGE_COLORS["S5"], [
+        ("# CSPs", len(s5_partners), fmt_pct(len(s5_partners), s1_csps)),
+        ("# Netbox at CSPs (Metabase IDLE)", idle_total, ""),
+        ("# Could not pick — raw (U1+U2 pending)", s5_could_not_pick_raw, ""),
+        ("# Duplicates — U2 (pending customer's netbox already at CSP)", dup, ""),
+        ("# Could not pick — deduped", s5_could_not_pick, ""),
+        ("# Total Netbox Liability", s5_liability, ""),
     ]), unsafe_allow_html=True)
 
-    # ── S6 ───────────────────────────────────────────────────────────────────
+    # ── S6 — Complete ────────────────────────────────────────────────────────
     s6_csps = len(by_state.get("S6", []))
     if s6_csps > 0:
         st.markdown(stage_card("STAGE 6  —  COMPLETE", STAGE_COLORS["S6"], [
-            ("# CSPs", s6_csps),
+            ("# CSPs", s6_csps, fmt_pct(s6_csps, s1_csps)),
         ]), unsafe_allow_html=True)
 
 
@@ -867,26 +874,19 @@ def render():
     u1_by, u2_total, u2_picked = build_sheet_lookups(u1_rows, u2_rows)
 
     # Use partner_code (= Metabase partner_account_id) as the unique join key.
-    # partner_name is NOT unique in supply_model — terminated + new partners can share a name.
     def code_of(p): return p.get("partner_code")
 
-    s2_s3_codes = [code_of(p) for p in partners if p["current_state"] in ("S2", "S3")]
-    s4_zero_codes = [code_of(p) for p in partners if p["current_state"] == "S4"
-                     and (u1_by.get(p["name"].lower(), {}).get("total", 0) == 0)
-                     and (u2_total.get(p["name"].lower(), 0) == 0)]
-    s5_zero_codes = [code_of(p) for p in partners if p["current_state"] == "S5"
-                     and (u1_by.get(p["name"].lower(), {}).get("total", 0) == 0)
-                     and (u2_total.get(p["name"].lower(), 0) == 0)]
+    all_codes = [code_of(p) for p in partners if code_of(p)]
     s5_all_codes = [code_of(p) for p in partners if p["current_state"] == "S5"]
     s5_all_lower = {p["name"].lower() for p in partners if p["current_state"] == "S5"}
-    code_to_name = {str(p["partner_code"]): p["name"] for p in partners if p.get("partner_code")}
-    name_to_code = {p["name"]: p.get("partner_code") for p in partners if p.get("partner_code")}
+    name_to_code = {p["name"]: code_of(p) for p in partners if code_of(p)}
 
+    # Fetch R15 for ALL partners in exit pipeline (so S1 has a userbase denominator)
     r15_by_code = fetch_r15_active_by_code(
-        secrets["metabase_url"], secrets["metabase_key"],
-        s2_s3_codes + s4_zero_codes + s5_zero_codes,
+        secrets["metabase_url"], secrets["metabase_key"], all_codes,
     )
-    # Map back to name for downstream use
+    # Also expose by name for data-quality flagging (Tab 3)
+    code_to_name = {str(code_of(p)): p["name"] for p in partners if code_of(p)}
     r15_by = {code_to_name.get(code, code): cnt for code, cnt in r15_by_code.items()}
     idle_total = fetch_idle_devices_total(
         secrets["metabase_url"], secrets["metabase_key"], s5_all_codes,
@@ -942,7 +942,7 @@ def render():
     with tab1:
         render_tab1_status(u1, u2)
     with tab2:
-        render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by, idle_total, s5_dedup)
+        render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup)
     with tab3:
         render_tab3_data_quality(partners, u1_by, u2_total, r15_by)
     with tab4:
