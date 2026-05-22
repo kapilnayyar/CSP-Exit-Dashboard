@@ -10,14 +10,16 @@ Data: pulled from Google Sheets every 30 seconds via service account.
 
 import streamlit as st
 import gspread
+import requests
 from google.oauth2.service_account import Credentials
 from streamlit_autorefresh import st_autorefresh
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import hashlib
 import json
 import os
+import pandas as pd
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -57,6 +59,10 @@ def get_secrets():
         return {
             "sheet_id": st.secrets["GOOGLE_SHEET_ID"],
             "gcp_creds": dict(st.secrets["gcp_service_account"]),
+            "supabase_url": st.secrets.get("SUPABASE_URL", ""),
+            "supabase_key": st.secrets.get("SUPABASE_ANON_KEY", ""),
+            "metabase_url": st.secrets.get("METABASE_URL", ""),
+            "metabase_key": st.secrets.get("METABASE_API_KEY", ""),
         }
     except Exception:
         from dotenv import load_dotenv
@@ -67,6 +73,10 @@ def get_secrets():
         return {
             "sheet_id": os.getenv("GOOGLE_SHEET_ID"),
             "gcp_creds": gcp,
+            "supabase_url": os.getenv("SUPABASE_URL", ""),
+            "supabase_key": os.getenv("SUPABASE_ANON_KEY", ""),
+            "metabase_url": os.getenv("METABASE_URL", ""),
+            "metabase_key": os.getenv("METABASE_API_KEY", ""),
         }
 
 
@@ -97,6 +107,195 @@ def fetch_sheets(sheet_id, gcp_creds):
     u1_rows = book.worksheet(U1_TAB).get_all_records()
 
     return u2_rows, u1_rows
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SUPABASE — partner-exit-tracker state (read-only via anon key)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=30)
+def fetch_partners(supabase_url, supabase_key):
+    """Pull all partners with state, partner_code, u1/u2 counts. SELECT-only."""
+    if not supabase_url or not supabase_key:
+        return []
+    headers = {"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}", "Accept": "application/json"}
+    # partners table → get state + code + name
+    r = requests.get(
+        f"{supabase_url}/rest/v1/partners",
+        params={"select": "id,name,partner_code,current_state,risk_state"},
+        headers=headers, timeout=15,
+    )
+    partners = r.json() if r.status_code == 200 else []
+    # partner_details_extended for u1/u2 counts
+    r2 = requests.get(
+        f"{supabase_url}/rest/v1/partner_details_extended",
+        params={"select": "id,u1_count,u2_count"},
+        headers=headers, timeout=15,
+    )
+    de = {row["id"]: row for row in (r2.json() if r2.status_code == 200 else [])}
+    for p in partners:
+        d = de.get(p["id"], {})
+        p["u1_count"] = d.get("u1_count") or 0
+        p["u2_count"] = d.get("u2_count") or 0
+    return partners
+
+
+@st.cache_data(ttl=30)
+def fetch_u1_customers(supabase_url, supabase_key):
+    """Pull U1 customer-level records — used for dedup against Metabase IDLE devices."""
+    if not supabase_url or not supabase_key:
+        return []
+    headers = {"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}", "Accept": "application/json"}
+    # Paginate over u1_customers (1631+ rows, default REST limit 1000)
+    all_rows = []
+    offset = 0
+    while True:
+        r = requests.get(
+            f"{supabase_url}/rest/v1/u1_customers",
+            params={"select": "customer_mobile,partner_id,installation_completed", "limit": 1000, "offset": offset},
+            headers=headers, timeout=15,
+        )
+        if r.status_code != 200:
+            break
+        batch = r.json()
+        all_rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        offset += 1000
+    return all_rows
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# METABASE — read-only queries via API key
+# ─────────────────────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=300)
+def metabase_query(metabase_url, api_key, sql, database_id=113):
+    """Run a Snowflake query via Metabase API. Cached 5 min (heavier query)."""
+    if not metabase_url or not api_key:
+        return {"rows": [], "cols": [], "error": "Metabase not configured"}
+    try:
+        r = requests.post(
+            f"{metabase_url}/api/dataset",
+            headers={"x-api-key": api_key, "Content-Type": "application/json"},
+            json={"database": database_id, "type": "native", "native": {"query": sql}},
+            timeout=60,
+        )
+        if r.status_code not in (200, 202):
+            return {"rows": [], "cols": [], "error": f"HTTP {r.status_code}"}
+        d = r.json().get("data", {})
+        cols = [c.get("display_name") or c.get("name") for c in d.get("cols", [])]
+        return {"rows": d.get("rows", []), "cols": cols, "error": None}
+    except Exception as e:
+        return {"rows": [], "cols": [], "error": str(e)}
+
+
+def metabase_safe_in_list(names):
+    """Build a SQL IN-clause string from a name list, single-quote escaped."""
+    return ", ".join("'" + str(n).replace("'", "''") + "'" for n in names)
+
+
+@st.cache_data(ttl=300)
+def fetch_r15_active_by_partner(metabase_url, api_key, partner_names):
+    """Return {partner_name: active_r15_count} for the given partner list."""
+    if not partner_names:
+        return {}
+    in_list = metabase_safe_in_list(partner_names)
+    sql = f"""SELECT sm.partner_name, COUNT(DISTINCT c.account_id) AS active_r15
+FROM prod_db.public.t_router_user_mapping a
+JOIN t_wg_customer c ON a.router_nas_id = c.nasid
+JOIN supply_model sm ON c.lco_account_id = sm.partner_account_id
+WHERE a.auth_state = 1
+  AND a.otp NOT IN ('FREE','PAY_ONLINE','CASH','ROAM')
+  AND a.mobile > '5999999999' AND a.device_limit = 10
+  AND CAST(a.otp_expiry_time AS DATE) >= DATEADD(day, -15, CURRENT_DATE)
+  AND CURRENT_DATE >= CAST(a.otp_issued_time AS DATE)
+  AND sm.partner_name IN ({in_list})
+GROUP BY 1"""
+    res = metabase_query(metabase_url, api_key, sql)
+    return {row[0]: row[1] for row in res["rows"]}
+
+
+@st.cache_data(ttl=300)
+def fetch_idle_devices_total(metabase_url, api_key, partner_names):
+    """Return total IDLE devices summed across given partners (= Netbox at CSPs)."""
+    if not partner_names:
+        return 0
+    in_list = metabase_safe_in_list(partner_names)
+    sql = f"""SELECT COUNT(*) AS total
+FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
+JOIN supply_model sm ON sm.partner_account_id = td."LCO_ACCOUNT_ID"
+WHERE td."STATUS" = 'IDLE' AND sm.partner_name IN ({in_list})"""
+    res = metabase_query(metabase_url, api_key, sql)
+    return res["rows"][0][0] if res["rows"] else 0
+
+
+@st.cache_data(ttl=300)
+def search_devices_at_partner(metabase_url, api_key, partner_name):
+    """Tab 4 search 1 — list of IDLE devices for a partner."""
+    sql = f"""SELECT td."DEVICE_ID", td."MAC", td."SERIAL", td."MODEL", td."STATUS", td."ADDED_TIME"
+FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
+JOIN supply_model sm ON sm.partner_account_id = td."LCO_ACCOUNT_ID"
+WHERE td."STATUS" = 'IDLE' AND sm.partner_name = '{partner_name.replace("'", "''")}'
+ORDER BY td."ADDED_TIME" DESC"""
+    return metabase_query(metabase_url, api_key, sql)
+
+
+@st.cache_data(ttl=300)
+def fetch_idle_nas_by_partner(metabase_url, api_key, partner_names):
+    """For each partner, return a set of NAS_IDs currently in IDLE state."""
+    if not partner_names:
+        return {}
+    in_list = metabase_safe_in_list(partner_names)
+    sql = f"""SELECT sm.partner_name, td."NASID"
+FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
+JOIN supply_model sm ON sm.partner_account_id = td."LCO_ACCOUNT_ID"
+WHERE td."STATUS" = 'IDLE' AND sm.partner_name IN ({in_list})
+  AND td."NASID" IS NOT NULL"""
+    res = metabase_query(metabase_url, api_key, sql)
+    out = defaultdict(set)
+    for row in res["rows"]:
+        out[row[0]].add(str(row[1]))
+    return out
+
+
+@st.cache_data(ttl=300)
+def fetch_mobile_to_nas(metabase_url, api_key, mobiles):
+    """Return {mobile: router_nas_id} for the given mobile list (most recent assignment)."""
+    if not mobiles:
+        return {}
+    mobs = [str(m).strip() for m in mobiles if m]
+    # Quote each mobile (they're stored as strings in t_router_user_mapping)
+    in_list = ", ".join("'" + m.replace("'", "''") + "'" for m in mobs)
+    sql = f"""SELECT mobile, router_nas_id
+FROM prod_db.public.t_router_user_mapping
+WHERE mobile IN ({in_list})
+  AND router_nas_id IS NOT NULL
+QUALIFY ROW_NUMBER() OVER (PARTITION BY mobile ORDER BY created_on DESC NULLS LAST) = 1"""
+    res = metabase_query(metabase_url, api_key, sql)
+    return {str(row[0]): str(row[1]) for row in res["rows"]}
+
+
+@st.cache_data(ttl=300)
+def search_active_userbase(metabase_url, api_key, partner_name):
+    """Tab 4 search 2 — list of active R15 customers (name, mobile, nasid) for a partner."""
+    sql = f"""SELECT
+  c.account_id AS customer_account_id,
+  a.mobile,
+  a.router_nas_id AS netbox_id,
+  CAST(a.otp_issued_time AS DATE) AS plan_start,
+  CAST(a.otp_expiry_time AS DATE) AS plan_expiry
+FROM prod_db.public.t_router_user_mapping a
+JOIN t_wg_customer c ON a.router_nas_id = c.nasid
+JOIN supply_model sm ON c.lco_account_id = sm.partner_account_id
+WHERE a.auth_state = 1
+  AND a.otp NOT IN ('FREE','PAY_ONLINE','CASH','ROAM')
+  AND a.mobile > '5999999999' AND a.device_limit = 10
+  AND CAST(a.otp_expiry_time AS DATE) >= DATEADD(day, -15, CURRENT_DATE)
+  AND CURRENT_DATE >= CAST(a.otp_issued_time AS DATE)
+  AND sm.partner_name = '{partner_name.replace("'", "''")}'
+ORDER BY plan_expiry DESC"""
+    return metabase_query(metabase_url, api_key, sql)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -267,30 +466,11 @@ AMBER = "#FFEB9C"
 RED = "#F8CBAD"
 
 
-def render():
-    secrets = get_secrets()
-
-    with st.spinner("Fetching live data from Google Sheet..."):
-        u2_rows, u1_rows = fetch_sheets(secrets["sheet_id"], secrets["gcp_creds"])
-
-    u2 = classify_u2(u2_rows)
-    u1 = classify_u1(u1_rows)
-
+def render_tab1_status(u1, u2):
+    """Tab 1 — the original 5-table view (Status & Cohorts)."""
     grand_total = u1["total"] + u2["total"]
     u1_pending = u1["not_migrated"] + u1["in_process"]
     u2_not_team = u2["partner"] + u2["swu"]
-
-    # ── Title bar ────────────────────────────────────────────────────────────
-    st.markdown(
-        '<div style="background:#1F4E78;color:#ffffff;padding:14px;border-radius:8px;'
-        'font-size:17px;font-weight:bold;text-align:center;margin-bottom:6px">'
-        'CSP EXIT STATUS</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<div class="updated">Live — auto-refreshes every 30 seconds</div>',
-        unsafe_allow_html=True,
-    )
 
     # ── Table 1: Total Userbase — U1 vs U2 Bifurcation ───────────────────────
     html = table_header("Total Userbase — U1 vs U2 Bifurcation")
@@ -355,6 +535,403 @@ def render():
     html += total_row("Total", u2_not_team)
     html += close_table()
     st.markdown(html, unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FUNNEL HELPERS — sheet lookups by partner name
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_sheet_lookups(u1_rows, u2_rows):
+    """Return per-partner U1/U2 metrics from Google Sheet, keyed by lowercased name."""
+    u1_by = {}
+    for r in u1_rows:
+        name = str(r.get("Exit Partner Name") or "").strip()
+        if not name:
+            continue
+        u1_by[name.lower()] = {
+            "total": _to_int(r.get("Total U1 User")),
+            "migrated": _to_int(r.get("Migrated")),
+        }
+    u2_total = defaultdict(int)
+    u2_picked = defaultdict(int)
+    for r in u2_rows:
+        name = str(r.get("Partner") or "").strip()
+        mobile = r.get("Mobile")
+        if not name or not mobile:
+            continue
+        u2_total[name.lower()] += 1
+        if str(r.get("Remarks Dropdown") or "").strip().lower() == "device picked up":
+            u2_picked[name.lower()] += 1
+    return u1_by, u2_total, u2_picked
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 2 — CSP Exit Funnel
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Funnel stage colors
+STAGE_COLORS = {
+    "S1": "#1F4E78",
+    "S2": "#2E75B6",
+    "S3": "#ED7D31",
+    "S4a": "#548235",
+    "S4b": "#BF9000",
+    "S4c": "#375623",
+    "S5": "#9C0006",
+    "S6": "#404040",
+}
+
+
+def stage_card(stage_label, color, metrics):
+    """Render one funnel stage in Tab 1's table style: colored header + S.No / Category / Count."""
+    html = (
+        f'<div style="background:{color};color:#ffffff;padding:10px 14px;'
+        f'font-weight:bold;font-size:14px;margin-top:14px;border-radius:6px 6px 0 0">'
+        f'{stage_label}</div>'
+        '<table class="csp-table">'
+        '<tr>'
+        '<th style="background:#2E75B6;color:#ffffff;width:60px">S.No</th>'
+        '<th style="background:#2E75B6;color:#ffffff">Category</th>'
+        '<th style="background:#2E75B6;color:#ffffff;width:140px;text-align:right">Count</th>'
+        '</tr>'
+    )
+    for i, (label, value) in enumerate(metrics, start=1):
+        v_str = f"{value:,}" if isinstance(value, int) else str(value)
+        html += (
+            f'<tr>'
+            f'<td style="background:#ffffff;color:#000000;text-align:center">{i}</td>'
+            f'<td style="background:#ffffff;color:#000000">{label}</td>'
+            f'<td style="background:#ffffff;color:#000000;text-align:right;font-weight:bold">{v_str}</td>'
+            f'</tr>'
+        )
+    html += "</table>"
+    return html
+
+
+def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by, idle_total, s5_dedup):
+    """Tab 2 — the 7-stage funnel of mutually exclusive current-state cards."""
+    # Group partners by current_state
+    by_state = defaultdict(list)
+    for p in partners:
+        by_state[p["current_state"]].append(p)
+
+    # ── S1 ───────────────────────────────────────────────────────────────────
+    s1_csps = len(by_state.get("S1", []))
+    st.markdown(stage_card("STAGE 1  —  EXIT DECLARED", STAGE_COLORS["S1"], [
+        ("# CSPs", s1_csps), ("# Userbase", 0),
+    ]), unsafe_allow_html=True)
+
+    # ── S2 ───────────────────────────────────────────────────────────────────
+    s2_partners = by_state.get("S2", [])
+    s2_userbase = sum(r15_by.get(p["name"], 0) for p in s2_partners)
+    st.markdown(stage_card("STAGE 2  —  NOTICE PERIOD", STAGE_COLORS["S2"], [
+        ("# CSPs", len(s2_partners)),
+        ("# Userbase (R15 active)", s2_userbase),
+    ]), unsafe_allow_html=True)
+
+    # ── S3 ───────────────────────────────────────────────────────────────────
+    s3_partners = by_state.get("S3", [])
+    s3_userbase = sum(r15_by.get(p["name"], 0) for p in s3_partners)
+    st.markdown(stage_card("STAGE 3  —  BLOCKING", STAGE_COLORS["S3"], [
+        ("# CSPs", len(s3_partners)),
+        ("# Userbase (R15 active)", s3_userbase),
+    ]), unsafe_allow_html=True)
+
+    # ── S4 aggregates ────────────────────────────────────────────────────────
+    s4_partners = by_state.get("S4", [])
+    # S4a — all S4 CSPs; aggregate U1/U2 from sheet + pending-to-add from Metabase R15
+    s4a_u1 = s4a_u2 = s4a_pending = 0
+    # S4b — only CSPs that have sheet data
+    s4b_csps = 0
+    s4b_u1 = s4b_u1_mig = s4b_u2 = s4b_u2_pick = 0
+    for p in s4_partners:
+        key = p["name"].lower()
+        u1d = u1_by.get(key, {"total": 0, "migrated": 0})
+        t1 = u1d["total"]; m1 = u1d["migrated"]
+        t2 = u2_total.get(key, 0); p2 = u2_picked.get(key, 0)
+        s4a_u1 += t1; s4a_u2 += t2
+        in_sheet = t1 > 0 or t2 > 0
+        if in_sheet:
+            s4b_csps += 1
+            s4b_u1 += t1; s4b_u1_mig += m1; s4b_u2 += t2; s4b_u2_pick += p2
+        else:
+            # CSP missing from sheet — pending userbase comes from Metabase R15
+            s4a_pending += r15_by.get(p["name"], 0)
+
+    st.markdown(stage_card("STAGE 4a  —  EXECUTION BEGUN", STAGE_COLORS["S4a"], [
+        ("# CSPs", len(s4_partners)),
+        ("# U1 Userbase", s4a_u1),
+        ("# U2 Userbase", s4a_u2),
+        ("# Userbase Pending to Add (R15)", s4a_pending),
+    ]), unsafe_allow_html=True)
+
+    st.markdown(stage_card("STAGE 4b  —  EXECUTION IN PROCESS", STAGE_COLORS["S4b"], [
+        ("# CSPs", s4b_csps),
+        ("# U1 Count", s4b_u1),
+        ("# Migration Done", s4b_u1_mig),
+        ("# U2 Count", s4b_u2),
+        ("# Netbox Pickup Done", s4b_u2_pick),
+    ]), unsafe_allow_html=True)
+
+    # ── S4c: CSPs that already moved to S5 — execution complete ──────────────
+    s5_partners = by_state.get("S5", [])
+    s4c_u1_mig = sum(u1_by.get(p["name"].lower(), {}).get("migrated", 0) for p in s5_partners)
+    s4c_u2_pick = sum(u2_picked.get(p["name"].lower(), 0) for p in s5_partners)
+    st.markdown(stage_card("STAGE 4c  —  EXECUTION COMPLETED (CSPs now in S5)", STAGE_COLORS["S4c"], [
+        ("# CSPs", len(s5_partners)),
+        ("# U1 Migration Completed", s4c_u1_mig),
+        ("# U2 Netbox Picked by Wiom", s4c_u2_pick),
+    ]), unsafe_allow_html=True)
+
+    # ── S5 ───────────────────────────────────────────────────────────────────
+    s5_partners = by_state.get("S5", [])
+    s5_u1_total = s5_u1_mig = s5_u2_total = s5_u2_picked = 0
+    for p in s5_partners:
+        key = p["name"].lower()
+        u1d = u1_by.get(key, {"total": 0, "migrated": 0})
+        s5_u1_total += u1d["total"]; s5_u1_mig += u1d["migrated"]
+        s5_u2_total += u2_total.get(key, 0); s5_u2_picked += u2_picked.get(key, 0)
+    s5_could_not_pick_raw = (s5_u1_total - s5_u1_mig) + (s5_u2_total - s5_u2_picked)
+    dup = s5_dedup.get("duplicates", 0)
+    s5_could_not_pick = max(s5_could_not_pick_raw - dup, 0)
+    s5_liability = idle_total + s5_could_not_pick
+
+    st.markdown(stage_card("STAGE 5  —  INITIATED (Final reconciliation)", STAGE_COLORS["S5"], [
+        ("# CSPs", len(s5_partners)),
+        ("# Netbox at CSPs (Metabase IDLE)", idle_total),
+        ("# Could not pick — raw (U1+U2 pending)", s5_could_not_pick_raw),
+        ("# Duplicates — U2 (pending customer's netbox already at CSP)", dup),
+        ("# Could not pick — deduped", s5_could_not_pick),
+        ("# Total Netbox Liability", s5_liability),
+    ]), unsafe_allow_html=True)
+
+    # ── S6 ───────────────────────────────────────────────────────────────────
+    s6_csps = len(by_state.get("S6", []))
+    if s6_csps > 0:
+        st.markdown(stage_card("STAGE 6  —  COMPLETE", STAGE_COLORS["S6"], [
+            ("# CSPs", s6_csps),
+        ]), unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 3 — Data Quality (sheet vs Metabase reconciliation)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_tab3_data_quality(partners, u1_by, u2_total, r15_by):
+    """List CSPs in S4/S5 with 0 sheet data but R15>0 in Metabase."""
+    st.markdown(
+        '<div style="background:#9C0006;color:#ffffff;padding:10px 14px;'
+        'font-weight:bold;font-size:14px;margin-top:6px;border-radius:6px">'
+        '🚨 Sheet vs Metabase Reconciliation</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption("CSPs flagged here have **0 rows in the Google Sheet** but **active R15 customers in Metabase** — likely missing entries.")
+
+    for stage in ["S4", "S5"]:
+        stage_partners = [p for p in partners if p["current_state"] == stage]
+        flagged = []
+        for p in stage_partners:
+            key = p["name"].lower()
+            in_sheet = (u1_by.get(key, {}).get("total", 0) > 0) or (u2_total.get(key, 0) > 0)
+            r15 = r15_by.get(p["name"], 0)
+            if not in_sheet and r15 > 0:
+                flagged.append({
+                    "CSP Name": p["name"],
+                    "Partner Code": p.get("partner_code", ""),
+                    "Risk State": p.get("risk_state", ""),
+                    "Active R15 customers": r15,
+                })
+
+        st.markdown(f"#### {stage} — {len(flagged)} CSPs missing from sheet")
+        if flagged:
+            df = pd.DataFrame(sorted(flagged, key=lambda x: -x["Active R15 customers"]))
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.caption(f"Hidden active customers in {stage}: **{sum(f['Active R15 customers'] for f in flagged):,}**")
+        else:
+            st.success(f"All {stage} CSPs accounted for in the sheet.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 4 — Search (4 lookup boxes)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_tab4_search(partners, u2_rows, secrets):
+    """Four searchbars: devices, active userbase, U2 list, U1 list (placeholder)."""
+    # Build select options: "Name (state · code)"
+    options = sorted(
+        [f"{p['name']}  —  {p['current_state']}  ·  {p.get('partner_code','')}" for p in partners]
+    )
+    name_to_partner = {f"{p['name']}  —  {p['current_state']}  ·  {p.get('partner_code','')}": p for p in partners}
+
+    def partner_picker(key):
+        choice = st.selectbox(
+            "Type partner name to search:",
+            options=[""] + options,
+            key=key,
+            help="Start typing — list filters as you type. Pick one to run the search.",
+        )
+        return name_to_partner.get(choice) if choice else None
+
+    # ── Search 1: Devices at partner ─────────────────────────────────────────
+    st.markdown("### 🔍 Search 1 — Devices at Partner (from Metabase)")
+    p1 = partner_picker("s1_pick")
+    if p1:
+        st.write(f"**{p1['name']}** · Code: `{p1.get('partner_code','')}` · State: `{p1['current_state']}`")
+        with st.spinner("Querying Metabase..."):
+            res = search_devices_at_partner(secrets["metabase_url"], secrets["metabase_key"], p1["name"])
+        if res.get("error"):
+            st.error(f"Metabase error: {res['error']}")
+        elif res["rows"]:
+            df = pd.DataFrame(res["rows"], columns=res["cols"])
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.caption(f"{len(df)} IDLE device(s).")
+        else:
+            st.info("No IDLE devices at this partner.")
+
+    st.divider()
+
+    # ── Search 2: Active userbase (R15) ──────────────────────────────────────
+    st.markdown("### 🔍 Search 2 — Active Userbase (R15) at Partner (from Metabase)")
+    p2 = partner_picker("s2_pick")
+    if p2:
+        st.write(f"**{p2['name']}** · Code: `{p2.get('partner_code','')}` · State: `{p2['current_state']}`")
+        with st.spinner("Querying Metabase..."):
+            res = search_active_userbase(secrets["metabase_url"], secrets["metabase_key"], p2["name"])
+        if res.get("error"):
+            st.error(f"Metabase error: {res['error']}")
+        elif res["rows"]:
+            df = pd.DataFrame(res["rows"], columns=res["cols"])
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.caption(f"{len(df)} active R15 customer(s).")
+        else:
+            st.info("No active R15 customers at this partner.")
+
+    st.divider()
+
+    # ── Search 3: U2 customer list with collected filter ─────────────────────
+    st.markdown("### 🔍 Search 3 — U2 Customers (from Google Sheet)")
+    p3 = partner_picker("s3_pick")
+    if p3:
+        st.write(f"**{p3['name']}** · Code: `{p3.get('partner_code','')}` · State: `{p3['current_state']}`")
+        f = st.radio("Filter:", ["All", "Device collected", "Device not collected"], horizontal=True, key="s3_filter")
+        target = p3["name"].lower()
+        rows = []
+        for r in u2_rows:
+            if str(r.get("Partner") or "").strip().lower() != target:
+                continue
+            if not r.get("Mobile"):
+                continue
+            remark = str(r.get("Remarks Dropdown") or "").strip()
+            collected = remark.lower() == "device picked up"
+            if f == "Device collected" and not collected: continue
+            if f == "Device not collected" and collected: continue
+            rows.append({
+                "Cx Name": r.get("Cx Name", ""),
+                "Mobile": r.get("Mobile", ""),
+                "Address": r.get("Address", ""),
+                "Remarks Dropdown": remark or "(blank)",
+            })
+        if rows:
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            st.caption(f"{len(rows)} customer(s) matching filter.")
+        else:
+            st.info("No U2 customers for this partner under the current filter.")
+
+    st.divider()
+
+    # ── Search 4: U1 migration list (placeholder) ────────────────────────────
+    st.markdown("### 🔍 Search 4 — U1 Migration Status (from new Google Sheet)")
+    st.warning("📋 Data source not yet configured. Share the new Google Sheet tab name + columns and I'll wire it in.")
+    st.caption("Will support partner selection + filter (Migrated / Not Migrated) once the source is added.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN render() — composes all 4 tabs
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render():
+    secrets = get_secrets()
+
+    with st.spinner("Fetching live data..."):
+        u2_rows, u1_rows = fetch_sheets(secrets["sheet_id"], secrets["gcp_creds"])
+        partners = fetch_partners(secrets["supabase_url"], secrets["supabase_key"])
+
+    u2 = classify_u2(u2_rows)
+    u1 = classify_u1(u1_rows)
+    u1_by, u2_total, u2_picked = build_sheet_lookups(u1_rows, u2_rows)
+
+    # Pre-fetch R15 (S2 + S3 + S4-without-sheet + S5-without-sheet) and idle device totals
+    s2_s3_names = [p["name"] for p in partners if p["current_state"] in ("S2", "S3")]
+    s4_zero = [p["name"] for p in partners if p["current_state"] == "S4"
+               and (u1_by.get(p["name"].lower(), {}).get("total", 0) == 0)
+               and (u2_total.get(p["name"].lower(), 0) == 0)]
+    s5_zero = [p["name"] for p in partners if p["current_state"] == "S5"
+               and (u1_by.get(p["name"].lower(), {}).get("total", 0) == 0)
+               and (u2_total.get(p["name"].lower(), 0) == 0)]
+    s5_all = [p["name"] for p in partners if p["current_state"] == "S5"]
+    s5_all_lower = {n.lower() for n in s5_all}
+
+    r15_by = fetch_r15_active_by_partner(
+        secrets["metabase_url"], secrets["metabase_key"],
+        s2_s3_names + s4_zero + s5_zero,
+    )
+    idle_total = fetch_idle_devices_total(
+        secrets["metabase_url"], secrets["metabase_key"], s5_all,
+    )
+
+    # ── S5 dedup: U2 pending customers whose netbox is already IDLE at CSP ───
+    s5_dedup = {"duplicates": 0}
+    if s5_all and secrets["metabase_key"]:
+        # U2 pending mobiles (per partner) from Main sheet
+        pending_pairs = []  # (mobile, partner_name)
+        for r in u2_rows:
+            partner = str(r.get("Partner") or "").strip()
+            mobile = r.get("Mobile")
+            if not partner or not mobile: continue
+            if partner.lower() not in s5_all_lower: continue
+            if str(r.get("Remarks Dropdown") or "").strip().lower() == "device picked up": continue
+            pending_pairs.append((str(mobile).strip(), partner))
+
+        # Get NAS_ID per mobile + IDLE NAS sets per partner
+        all_mobiles = list({m for m, _ in pending_pairs})
+        mobile_to_nas = fetch_mobile_to_nas(
+            secrets["metabase_url"], secrets["metabase_key"], all_mobiles,
+        ) if all_mobiles else {}
+        idle_nas_by_partner = fetch_idle_nas_by_partner(
+            secrets["metabase_url"], secrets["metabase_key"], s5_all,
+        )
+
+        # Count duplicates: pending customer's NAS_ID is in IDLE set at their partner
+        dup = 0
+        for mobile, partner in pending_pairs:
+            nas = mobile_to_nas.get(mobile)
+            if nas and nas in idle_nas_by_partner.get(partner, set()):
+                dup += 1
+        s5_dedup["duplicates"] = dup
+
+    # Title bar
+    st.markdown(
+        '<div style="background:#1F4E78;color:#ffffff;padding:14px;border-radius:8px;'
+        'font-size:17px;font-weight:bold;text-align:center;margin-bottom:6px">'
+        'CSP EXIT TRACKER</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="updated">Live — auto-refreshes every 30 seconds</div>',
+        unsafe_allow_html=True,
+    )
+
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "Status & Cohorts", "CSP Exit Funnel", "Data Quality", "Search",
+    ])
+    with tab1:
+        render_tab1_status(u1, u2)
+    with tab2:
+        render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by, idle_total, s5_dedup)
+    with tab3:
+        render_tab3_data_quality(partners, u1_by, u2_total, r15_by)
+    with tab4:
+        render_tab4_search(partners, u2_rows, secrets)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
