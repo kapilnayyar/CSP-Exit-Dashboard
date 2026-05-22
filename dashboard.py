@@ -727,7 +727,6 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
         ("Netbox Pickup Done", s4b_u2_pick, fmt_pct(s4b_u2_pick, s4b_u2)),
         ("Userbase Pending to Add", s4b_pending, fmt_pct(s4b_pending, s4b_total_userbase)),
     ]), unsafe_allow_html=True)
-    st.caption("S4b % logic: CSPs = of S1 CSPs · U1/U2/Pending = share of S4b total userbase · Migration Done = of U1 · Netbox Pickup Done = of U2")
 
     # ── S5 — Reconciliation (Netbox metrics) ─────────────────────────────────
     s5_u1_total = s5_u1_mig = s5_u2_total = s5_u2_picked = 0
@@ -749,7 +748,6 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
         ("Could not pick deduped", s5_could_not_pick, fmt_pct(s5_could_not_pick, s5_liability)),
         ("Total Netbox Liability", s5_liability, "100.0%"),
     ]), unsafe_allow_html=True)
-    st.caption("S5 % logic: row 1 = of S1 CSPs · rows 2/3/5 = of Total Liability · row 4 = of Raw Pending · row 6 = whole")
 
     # ── S6 — Complete ────────────────────────────────────────────────────────
     s6_csps = len(by_state.get("S6", []))
