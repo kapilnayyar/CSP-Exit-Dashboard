@@ -718,14 +718,16 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
             s4b_pending += r15_of(p)
     s4b_csps = len(s4_partners)
 
+    s4b_total_userbase = s4b_u1 + s4b_u2 + s4b_pending
     st.markdown(stage_card("STAGE 4b  —  EXECUTION IN PROCESS (currently in S4)", STAGE_COLORS["S4a"], [
         ("CSPs", s4b_csps, fmt_pct(s4b_csps, s1_csps)),
-        ("U1 Userbase", s4b_u1, ""),
+        ("U1 Userbase", s4b_u1, fmt_pct(s4b_u1, s4b_total_userbase)),
         ("Migration Done", s4b_u1_mig, fmt_pct(s4b_u1_mig, s4b_u1)),
-        ("U2 Userbase", s4b_u2, ""),
+        ("U2 Userbase", s4b_u2, fmt_pct(s4b_u2, s4b_total_userbase)),
         ("Netbox Pickup Done", s4b_u2_pick, fmt_pct(s4b_u2_pick, s4b_u2)),
-        ("Userbase Pending to Add", s4b_pending, ""),
+        ("Userbase Pending to Add", s4b_pending, fmt_pct(s4b_pending, s4b_total_userbase)),
     ]), unsafe_allow_html=True)
+    st.caption("S4b % logic: CSPs = of S1 CSPs · U1/U2/Pending = share of S4b total userbase · Migration Done = of U1 · Netbox Pickup Done = of U2")
 
     # ── S5 — Reconciliation (Netbox metrics) ─────────────────────────────────
     s5_u1_total = s5_u1_mig = s5_u2_total = s5_u2_picked = 0
