@@ -894,7 +894,7 @@ def render():
 
     # ── S5 dedup: U2 pending customers whose netbox is already IDLE at CSP ───
     s5_dedup = {"duplicates": 0}
-    if s5_all and secrets["metabase_key"]:
+    if s5_all_codes and secrets["metabase_key"]:
         # U2 pending mobiles (per partner) from Main sheet
         pending_pairs = []  # (mobile, partner_name)
         for r in u2_rows:
