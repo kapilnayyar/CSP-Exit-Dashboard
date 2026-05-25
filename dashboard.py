@@ -644,12 +644,20 @@ def stage_card(stage_label, color, metrics):
         '<th style="background:#2E75B6;color:#ffffff;width:80px;text-align:right">%</th>'
         '</tr>'
     )
-    for i, item in enumerate(metrics, start=1):
+    serial = 0
+    for item in metrics:
         label, value, pct_str = item if len(item) == 3 else (item[0], item[1], "")
+        # Sub-rows (indented with leading whitespace) don't get a serial number
+        is_sub = isinstance(label, str) and label.startswith(" ")
+        if not is_sub:
+            serial += 1
+            serial_str = str(serial)
+        else:
+            serial_str = ""
         v_str = f"{value:,}" if isinstance(value, int) else str(value)
         html += (
             f'<tr>'
-            f'<td style="background:#ffffff;color:#000000;text-align:center">{i}</td>'
+            f'<td style="background:#ffffff;color:#000000;text-align:center">{serial_str}</td>'
             f'<td style="background:#ffffff;color:#000000">{label}</td>'
             f'<td style="background:#ffffff;color:#000000;text-align:right;font-weight:bold">{v_str}</td>'
             f'<td style="background:#ffffff;color:#000000;text-align:right">{pct_str or ""}</td>'
