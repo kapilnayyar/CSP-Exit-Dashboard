@@ -722,26 +722,11 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     s1_voluntary = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "Voluntary")
     s1_b1 = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "B1")
     s1_b2 = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "B2")
-    # CSP row contains the breakdown stacked vertically in the SAME row
-    lh = "line-height:1.8"
-    cat_html = (
-        f'<div style="{lh}"><b>CSP</b><br>'
-        f'&nbsp;&nbsp;↳ Voluntary<br>'
-        f'&nbsp;&nbsp;↳ B1<br>'
-        f'&nbsp;&nbsp;↳ B2</div>'
-    )
-    cnt_html = (
-        f'<div style="{lh}"><b>{s1_csps:,}</b><br>'
-        f'{s1_voluntary:,}<br>{s1_b1:,}<br>{s1_b2:,}</div>'
-    )
-    pct_html = (
-        f'<div style="{lh}"><b>100.0%</b><br>'
-        f'{fmt_pct(s1_voluntary, s1_csps)}<br>'
-        f'{fmt_pct(s1_b1, s1_csps)}<br>'
-        f'{fmt_pct(s1_b2, s1_csps)}</div>'
-    )
     st.markdown(stage_card("STAGE 1  —  EXIT DECLARED (total in exit pipeline)", STAGE_COLORS["S1"], [
-        (cat_html, cnt_html, pct_html),
+        ("CSP", s1_csps, "100.0%"),
+        ("  ↳ Voluntary", s1_voluntary, fmt_pct(s1_voluntary, s1_csps)),
+        ("  ↳ B1", s1_b1, fmt_pct(s1_b1, s1_csps)),
+        ("  ↳ B2", s1_b2, fmt_pct(s1_b2, s1_csps)),
         ("Userbase", s1_userbase, "100.0%"),
     ]), unsafe_allow_html=True)
 
