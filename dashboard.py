@@ -722,24 +722,26 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     s1_voluntary = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "Voluntary")
     s1_b1 = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "B1")
     s1_b2 = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "B2")
-    # CSP and its 3 breakdown rows all live in ONE single row (one serial number).
-    # Bold CSP/total on top, indented sub-types below — all aligned under Count and %.
-    lh = "line-height:1.8"
+    # CSP + its 3 breakdown rows in ONE row. Use bullets at same level so it's
+    # clear all 3 are peers under CSP (not nested inside each other).
+    lh = "line-height:1.9"
     cat_html = (
         f'<div style="{lh}"><b>CSP</b><br>'
-        f'&nbsp;&nbsp;&nbsp;&nbsp;↳ Voluntary<br>'
-        f'&nbsp;&nbsp;&nbsp;&nbsp;↳ B1<br>'
-        f'&nbsp;&nbsp;&nbsp;&nbsp;↳ B2</div>'
+        f'<span style="color:#666">&nbsp;&nbsp;&nbsp;&nbsp;&bull;&nbsp;Voluntary</span><br>'
+        f'<span style="color:#666">&nbsp;&nbsp;&nbsp;&nbsp;&bull;&nbsp;B1</span><br>'
+        f'<span style="color:#666">&nbsp;&nbsp;&nbsp;&nbsp;&bull;&nbsp;B2</span></div>'
     )
     cnt_html = (
         f'<div style="{lh}"><b>{s1_csps:,}</b><br>'
-        f'{s1_voluntary:,}<br>{s1_b1:,}<br>{s1_b2:,}</div>'
+        f'<span style="color:#666">{s1_voluntary:,}</span><br>'
+        f'<span style="color:#666">{s1_b1:,}</span><br>'
+        f'<span style="color:#666">{s1_b2:,}</span></div>'
     )
     pct_html = (
         f'<div style="{lh}"><b>100.0%</b><br>'
-        f'{fmt_pct(s1_voluntary, s1_csps)}<br>'
-        f'{fmt_pct(s1_b1, s1_csps)}<br>'
-        f'{fmt_pct(s1_b2, s1_csps)}</div>'
+        f'<span style="color:#666">{fmt_pct(s1_voluntary, s1_csps)}</span><br>'
+        f'<span style="color:#666">{fmt_pct(s1_b1, s1_csps)}</span><br>'
+        f'<span style="color:#666">{fmt_pct(s1_b2, s1_csps)}</span></div>'
     )
     st.markdown(stage_card("STAGE 1  —  EXIT DECLARED (total in exit pipeline)", STAGE_COLORS["S1"], [
         (cat_html, cnt_html, pct_html),
