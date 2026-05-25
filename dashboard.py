@@ -807,11 +807,11 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     st.markdown(stage_card("STAGE 5  —  RECONCILIATION (FNF process)", STAGE_COLORS["S5"], [
         ("CSPs", len(s5_partners), fmt_pct(len(s5_partners), s1_csps)),
         ("Netbox at CSPs", idle_total, fmt_pct(idle_total, s5_liability)),
-        ("Netbox collected from CSP", s5_devices_collected, fmt_pct(s5_devices_collected, s5_liability)),
         ("Could not pick (U1+U2 pending)", s5_could_not_pick_raw, fmt_pct(s5_could_not_pick_raw, s5_liability)),
         ("Duplicates U2 (pending customer's netbox already at CSP)", dup, fmt_pct(dup, s5_could_not_pick_raw)),
         ("Could not pick deduped", s5_could_not_pick, fmt_pct(s5_could_not_pick, s5_liability)),
         ("Total Netbox Liability", s5_liability, "100.0%"),
+        ("Netbox collected from CSP", s5_devices_collected, fmt_pct(s5_devices_collected, s5_liability)),
     ]), unsafe_allow_html=True)
 
     # ── S6 — Complete ────────────────────────────────────────────────────────
