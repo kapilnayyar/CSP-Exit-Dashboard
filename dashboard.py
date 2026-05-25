@@ -142,7 +142,8 @@ def fetch_netbox_collection(sheet_id, gcp_creds):
         csp_id = str(r.get("CSP ID") or "").strip()
         if not csp_id: continue
         try:
-            out[csp_id] = int(float(r.get("Netbox collected from CSP") or 0))
+            # Sheet's actual column header is "Devices collected from CSP" — keep this as-is
+            out[csp_id] = int(float(r.get("Devices collected from CSP") or 0))
         except (TypeError, ValueError):
             out[csp_id] = 0
     return out
