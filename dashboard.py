@@ -706,11 +706,16 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     s1_voluntary = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "Voluntary")
     s1_b1 = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "B1")
     s1_b2 = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "B2")
+    # Render the 3 types as styled pills in a single sub-row
+    pill_style = "display:inline-block;padding:3px 10px;margin:0 4px 0 0;background:#EBF3FB;border-radius:12px;font-size:12px"
+    pills_html = (
+        f'<span style="{pill_style}">Voluntary <b>{s1_voluntary:,}</b> · {fmt_pct(s1_voluntary, s1_csps)}</span>'
+        f'<span style="{pill_style}">B1 <b>{s1_b1:,}</b> · {fmt_pct(s1_b1, s1_csps)}</span>'
+        f'<span style="{pill_style}">B2 <b>{s1_b2:,}</b> · {fmt_pct(s1_b2, s1_csps)}</span>'
+    )
     st.markdown(stage_card("STAGE 1  —  EXIT DECLARED (total in exit pipeline)", STAGE_COLORS["S1"], [
         ("CSP", s1_csps, "100.0%"),
-        ("  ↳ Voluntary", s1_voluntary, fmt_pct(s1_voluntary, s1_csps)),
-        ("  ↳ B1", s1_b1, fmt_pct(s1_b1, s1_csps)),
-        ("  ↳ B2", s1_b2, fmt_pct(s1_b2, s1_csps)),
+        (f"  ↳ {pills_html}", "", ""),
         ("Userbase", s1_userbase, "100.0%"),
     ]), unsafe_allow_html=True)
 
