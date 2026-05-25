@@ -40,6 +40,14 @@ EXCLUDED_PARTNER_CODES = {
     281749854632442,
 }
 
+# Sheet partner name -> canonical Supabase partner name (lowercased keys).
+# Use this when a CSP appears in the Main sheet under a different name than in Supabase.
+SHEET_NAME_ALIAS = {
+    "network solutions": "MANISHA TRADERS 1",
+    "manisha traders 2": "MANISHA TRADERS 1",
+    "khan enterprises": "MANISHA TRADERS 1",
+}
+
 _TOKEN_SALT = "csp-exit-wiom-dashboard-2026"
 
 
@@ -596,9 +604,13 @@ def build_sheet_lookups(u1_rows, u2_rows):
         name = str(r.get("Exit Partner Name") or "").strip()
         if not name:
             continue
-        u1_by[name.lower()] = {
-            "total": _to_int(r.get("Total U1 User")),
-            "migrated": _to_int(r.get("Migrated")),
+        key = name.lower()
+        key = SHEET_NAME_ALIAS.get(key, name).lower() if key in SHEET_NAME_ALIAS else key
+        # Aggregate if alias collapses multiple sheet names into one canonical
+        existing = u1_by.get(key, {"total": 0, "migrated": 0})
+        u1_by[key] = {
+            "total": existing["total"] + _to_int(r.get("Total U1 User")),
+            "migrated": existing["migrated"] + _to_int(r.get("Migrated")),
         }
     u2_total = defaultdict(int)
     u2_picked = defaultdict(int)
@@ -607,9 +619,12 @@ def build_sheet_lookups(u1_rows, u2_rows):
         mobile = r.get("Mobile")
         if not name or not mobile:
             continue
-        u2_total[name.lower()] += 1
+        # Map sheet name to canonical Supabase name if an alias is set
+        key = name.lower()
+        key = SHEET_NAME_ALIAS.get(key, name).lower() if key in SHEET_NAME_ALIAS else key
+        u2_total[key] += 1
         if str(r.get("Remarks Dropdown") or "").strip().lower() == "device picked up":
-            u2_picked[name.lower()] += 1
+            u2_picked[key] += 1
     return u1_by, u2_total, u2_picked
 
 
