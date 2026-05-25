@@ -694,15 +694,15 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     s1_csps = len(in_pipeline)
     s1_userbase = sum(userbase_of(p) for p in in_pipeline)
 
-    # ── S1 — Total in exit (with exit_type breakdown on one row) ─────────────
+    # ── S1 — Total in exit ───────────────────────────────────────────────────
     s1_voluntary = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "Voluntary")
     s1_b1 = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "B1")
     s1_b2 = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "B2")
-    breakdown_count = f"Voluntary {s1_voluntary:,} · B1 {s1_b1:,} · B2 {s1_b2:,}"
-    breakdown_pct = f"{fmt_pct(s1_voluntary, s1_csps)} · {fmt_pct(s1_b1, s1_csps)} · {fmt_pct(s1_b2, s1_csps)}"
     st.markdown(stage_card("STAGE 1  —  EXIT DECLARED (total in exit pipeline)", STAGE_COLORS["S1"], [
         ("CSPs", s1_csps, "100.0%"),
-        ("  ↳ by exit_type", breakdown_count, breakdown_pct),
+        ("  ↳ Voluntary", s1_voluntary, fmt_pct(s1_voluntary, s1_csps)),
+        ("  ↳ B1", s1_b1, fmt_pct(s1_b1, s1_csps)),
+        ("  ↳ B2", s1_b2, fmt_pct(s1_b2, s1_csps)),
         ("Userbase", s1_userbase, "100.0%"),
     ]), unsafe_allow_html=True)
 
@@ -774,9 +774,16 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     s5_could_not_pick = max(s5_could_not_pick_raw - dup, 0)
     s5_liability = idle_total + s5_could_not_pick
 
+    # Devices collected from CSP for S5 partners — from "S5 Netbox Collection" tab
+    netbox_collected_by_code = netbox_collected_by_code or {}
+    s5_devices_collected = sum(
+        netbox_collected_by_code.get(str(p.get("partner_code") or ""), 0)
+        for p in s5_partners
+    )
     st.markdown(stage_card("STAGE 5  —  RECONCILIATION (FNF process)", STAGE_COLORS["S5"], [
         ("CSPs", len(s5_partners), fmt_pct(len(s5_partners), s1_csps)),
         ("Netbox at CSPs", idle_total, fmt_pct(idle_total, s5_liability)),
+        ("Devices collected from CSP", s5_devices_collected, fmt_pct(s5_devices_collected, s5_liability)),
         ("Could not pick (U1+U2 pending)", s5_could_not_pick_raw, fmt_pct(s5_could_not_pick_raw, s5_liability)),
         ("Duplicates U2 (pending customer's netbox already at CSP)", dup, fmt_pct(dup, s5_could_not_pick_raw)),
         ("Could not pick deduped", s5_could_not_pick, fmt_pct(s5_could_not_pick, s5_liability)),
