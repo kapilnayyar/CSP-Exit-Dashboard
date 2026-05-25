@@ -791,10 +791,13 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
             netbox_collected_by_code.get(str(p.get("partner_code") or ""), 0)
             for p in by_state.get("S6", [])
         )
+        s6_device_total = idle_total_s6 + s6_collected
+        s6_at_pct = fmt_pct(idle_total_s6, s6_device_total) if s6_device_total else "0.0%"
+        s6_col_pct = fmt_pct(s6_collected, s6_device_total) if s6_device_total else "0.0%"
         st.markdown(stage_card("STAGE 6  —  COMPLETE", STAGE_COLORS["S6"], [
             ("CSPs", s6_csps, fmt_pct(s6_csps, s1_csps)),
-            ("Devices at CSP", idle_total_s6, ""),
-            ("Devices collected from CSP", s6_collected, fmt_pct(s6_collected, idle_total_s6 + s6_collected)),
+            ("Devices at CSP", idle_total_s6, s6_at_pct),
+            ("Devices collected from CSP", s6_collected, s6_col_pct),
         ]), unsafe_allow_html=True)
 
 
