@@ -848,39 +848,6 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
             ("Netbox at CSP", idle_total_s6, s6_at_pct),
             ("Total Netbox Collected from CSP", s6_collected, s6_col_pct),
         ]), unsafe_allow_html=True)
-    else:
-        s6_collected = 0
-
-    # ── Auto-generated daily text report ─────────────────────────────────────
-    today_str = datetime.now(IST).strftime("%d-%b-%Y")
-    completed_userbase = s4a_u1_total + s4a_u2_total
-    s4_current_userbase = s4b_u1 + s4b_u2
-    u1_conv = fmt_pct(s5_u1_mig, s5_u1_total)
-    u2_conv = fmt_pct(s5_u2_picked, s5_u2_total)
-    s6_phrase = (
-        f"{s6_csps} CSP has successfully reached S6 with {'zero pending' if s6_collected == 0 and idle_total_s6 == 0 else f'{idle_total_s6:,} pending'} Netbox liability."
-        if s6_csps == 1 else
-        f"{s6_csps} CSPs have successfully reached S6 with {'zero pending' if idle_total_s6 == 0 else f'{idle_total_s6:,} pending'} Netbox liability."
-    )
-    report = (
-        f"Please find the exit CSPs report as of today\n\n"
-        f"A total of {s1_csps:,} CSPs with a user base of {s1_userbase:,} have entered the exit process.\n"
-        f"Blocking has been completed for {s3_csps:,} CSPs, covering a user base of {s3_userbase:,}.\n"
-        f"The S4 stage has been completed for {s4a_csps_completed:,} CSPs with a user base of {completed_userbase:,}, "
-        f"while {s4b_csps:,} CSPs with a user base of {s4_current_userbase:,} are currently in the S4 stage.\n"
-        f"{len(s5_partners):,} CSPs have progressed to S5, with a total Netbox liability of {s5_liability:,}.\n"
-        f"Migration of {s5_u1_mig:,} U1 customers with {u1_conv} of conversion "
-        f"and {s5_u2_picked:,} U2 customers Device picked up with {u2_conv} of conversion for {len(s5_partners):,} CSPs.\n"
-        f"{s6_phrase}"
-    )
-
-    st.markdown(
-        f'<div style="background:#1F4E78;color:#ffffff;padding:10px 14px;'
-        f'font-weight:bold;font-size:14px;margin-top:18px;border-radius:6px 6px 0 0">'
-        f'📋 DAILY REPORT — {today_str}</div>',
-        unsafe_allow_html=True,
-    )
-    st.code(report, language=None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
