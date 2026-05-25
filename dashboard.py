@@ -133,7 +133,7 @@ def fetch_partners(supabase_url, supabase_key):
     # partners table → get state + code + name
     r = requests.get(
         f"{supabase_url}/rest/v1/partners",
-        params={"select": "id,name,partner_code,current_state,risk_state"},
+        params={"select": "id,name,partner_code,current_state,risk_state,exit_type"},
         headers=headers, timeout=15,
     )
     partners = r.json() if r.status_code == 200 else []
