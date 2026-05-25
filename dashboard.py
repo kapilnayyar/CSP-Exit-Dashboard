@@ -142,7 +142,7 @@ def fetch_netbox_collection(sheet_id, gcp_creds):
         csp_id = str(r.get("CSP ID") or "").strip()
         if not csp_id: continue
         try:
-            out[csp_id] = int(float(r.get("Devices collected from CSP") or 0))
+            out[csp_id] = int(float(r.get("Netbox collected from CSP") or 0))
         except (TypeError, ValueError):
             out[csp_id] = 0
     return out
@@ -774,7 +774,7 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     s5_could_not_pick = max(s5_could_not_pick_raw - dup, 0)
     s5_liability = idle_total + s5_could_not_pick
 
-    # Devices collected from CSP for S5 partners — from "S5 Netbox Collection" tab
+    # Netbox collected from CSP for S5 partners — from "S5 Netbox Collection" tab
     netbox_collected_by_code = netbox_collected_by_code or {}
     s5_devices_collected = sum(
         netbox_collected_by_code.get(str(p.get("partner_code") or ""), 0)
@@ -783,7 +783,7 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     st.markdown(stage_card("STAGE 5  —  RECONCILIATION (FNF process)", STAGE_COLORS["S5"], [
         ("CSPs", len(s5_partners), fmt_pct(len(s5_partners), s1_csps)),
         ("Netbox at CSPs", idle_total, fmt_pct(idle_total, s5_liability)),
-        ("Devices collected from CSP", s5_devices_collected, fmt_pct(s5_devices_collected, s5_liability)),
+        ("Netbox collected from CSP", s5_devices_collected, fmt_pct(s5_devices_collected, s5_liability)),
         ("Could not pick (U1+U2 pending)", s5_could_not_pick_raw, fmt_pct(s5_could_not_pick_raw, s5_liability)),
         ("Duplicates U2 (pending customer's netbox already at CSP)", dup, fmt_pct(dup, s5_could_not_pick_raw)),
         ("Could not pick deduped", s5_could_not_pick, fmt_pct(s5_could_not_pick, s5_liability)),
@@ -803,8 +803,8 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
         s6_col_pct = fmt_pct(s6_collected, s6_device_total) if s6_device_total else "0.0%"
         st.markdown(stage_card("STAGE 6  —  COMPLETE", STAGE_COLORS["S6"], [
             ("CSPs", s6_csps, fmt_pct(s6_csps, s1_csps)),
-            ("Devices at CSP", idle_total_s6, s6_at_pct),
-            ("Devices collected from CSP", s6_collected, s6_col_pct),
+            ("Netbox at CSP", idle_total_s6, s6_at_pct),
+            ("Netbox collected from CSP", s6_collected, s6_col_pct),
         ]), unsafe_allow_html=True)
 
 
