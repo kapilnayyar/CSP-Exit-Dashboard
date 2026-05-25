@@ -726,7 +726,7 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
         ("CSP", s1_csps, "100.0%"),
         ("  ├─ Voluntary", s1_voluntary, fmt_pct(s1_voluntary, s1_csps)),
         ("  ├─ B1", s1_b1, fmt_pct(s1_b1, s1_csps)),
-        ("  └─ B2", s1_b2, fmt_pct(s1_b2, s1_csps)),
+        ("  ├─ B2", s1_b2, fmt_pct(s1_b2, s1_csps)),
         ("Userbase", s1_userbase, "100.0%"),
     ]), unsafe_allow_html=True)
 
