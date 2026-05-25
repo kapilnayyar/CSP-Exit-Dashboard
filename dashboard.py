@@ -120,6 +120,34 @@ def fetch_sheets(sheet_id, gcp_creds):
     return u2_rows, u1_rows
 
 
+@st.cache_data(ttl=30)
+def fetch_netbox_collection(sheet_id, gcp_creds):
+    """Pull 'S5 Netbox Collection' tab — {partner_code: devices_collected}."""
+    creds = Credentials.from_service_account_info(
+        gcp_creds,
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/drive.readonly",
+        ],
+    )
+    client = gspread.authorize(creds)
+    book = client.open_by_key(sheet_id)
+    try:
+        ws = book.worksheet("S5 Netbox Collection")
+    except Exception:
+        return {}
+    rows = ws.get_all_records()
+    out = {}
+    for r in rows:
+        csp_id = str(r.get("CSP ID") or "").strip()
+        if not csp_id: continue
+        try:
+            out[csp_id] = int(float(r.get("Devices collected from CSP") or 0))
+        except (TypeError, ValueError):
+            out[csp_id] = 0
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SUPABASE — partner-exit-tracker state (read-only via anon key)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -636,7 +664,7 @@ def fmt_pct(n, denom):
     return f"{(n / denom * 100):.1f}%"
 
 
-def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup):
+def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup, idle_total_s6=0, netbox_collected_by_code=None):
     """Tab 2 — funnel. S1/S2/S3 are cumulative; S4a/S4b/S5/S6 are current snapshots.
     % computed against S1 totals."""
     by_state = defaultdict(list)
@@ -758,8 +786,15 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     # ── S6 — Complete ────────────────────────────────────────────────────────
     s6_csps = len(by_state.get("S6", []))
     if s6_csps > 0:
+        netbox_collected_by_code = netbox_collected_by_code or {}
+        s6_collected = sum(
+            netbox_collected_by_code.get(str(p.get("partner_code") or ""), 0)
+            for p in by_state.get("S6", [])
+        )
         st.markdown(stage_card("STAGE 6  —  COMPLETE", STAGE_COLORS["S6"], [
             ("CSPs", s6_csps, fmt_pct(s6_csps, s1_csps)),
+            ("Devices at CSP", idle_total_s6, ""),
+            ("Devices collected from CSP", s6_collected, fmt_pct(s6_collected, idle_total_s6 + s6_collected)),
         ]), unsafe_allow_html=True)
 
 
@@ -905,6 +940,7 @@ def render():
     with st.spinner("Fetching live data..."):
         u2_rows, u1_rows = fetch_sheets(secrets["sheet_id"], secrets["gcp_creds"])
         partners = fetch_partners(secrets["supabase_url"], secrets["supabase_key"])
+        netbox_collected_by_code = fetch_netbox_collection(secrets["sheet_id"], secrets["gcp_creds"])
 
     u2 = classify_u2(u2_rows)
     u1 = classify_u1(u1_rows)
@@ -928,6 +964,11 @@ def render():
     idle_total = fetch_idle_devices_total(
         secrets["metabase_url"], secrets["metabase_key"], s5_all_codes,
     )
+    # IDLE devices at CSPs currently in S6 (for the new S6 row)
+    s6_codes = [code_of(p) for p in partners if p["current_state"] == "S6"]
+    idle_total_s6 = fetch_idle_devices_total(
+        secrets["metabase_url"], secrets["metabase_key"], s6_codes,
+    ) if s6_codes else 0
 
     # ── S5 dedup: U2 pending customers whose netbox is already IDLE at CSP ───
     s5_dedup = {"duplicates": 0}
@@ -979,7 +1020,7 @@ def render():
     with tab1:
         render_tab1_status(u1, u2)
     with tab2:
-        render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup)
+        render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup, idle_total_s6, netbox_collected_by_code)
     with tab3:
         render_tab3_data_quality(partners, u1_by, u2_total, r15_by)
     with tab4:
