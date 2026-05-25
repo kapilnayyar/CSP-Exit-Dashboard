@@ -856,7 +856,7 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     completed_userbase = s4a_u1_total + s4a_u2_total
     s4_current_userbase = s4b_u1 + s4b_u2
     u1_conv = fmt_pct(s5_u1_mig, s5_u1_total)
-    u2_conv = fmt_pct(s5_u2_pick, s5_u2_total)
+    u2_conv = fmt_pct(s5_u2_picked, s5_u2_total)
     s6_phrase = (
         f"{s6_csps} CSP has successfully reached S6 with {'zero pending' if s6_collected == 0 and idle_total_s6 == 0 else f'{idle_total_s6:,} pending'} Netbox liability."
         if s6_csps == 1 else
@@ -870,7 +870,7 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
         f"while {s4b_csps:,} CSPs with a user base of {s4_current_userbase:,} are currently in the S4 stage.\n"
         f"{len(s5_partners):,} CSPs have progressed to S5, with a total Netbox liability of {s5_liability:,}.\n"
         f"Migration of {s5_u1_mig:,} U1 customers with {u1_conv} of conversion "
-        f"and {s5_u2_pick:,} U2 customers Device picked up with {u2_conv} of conversion for {len(s5_partners):,} CSPs.\n"
+        f"and {s5_u2_picked:,} U2 customers Device picked up with {u2_conv} of conversion for {len(s5_partners):,} CSPs.\n"
         f"{s6_phrase}"
     )
 
