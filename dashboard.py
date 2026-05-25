@@ -722,11 +722,14 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     s1_voluntary = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "Voluntary")
     s1_b1 = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "B1")
     s1_b2 = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "B2")
+    # 3 types stacked in ONE single sub-row under CSP, values aligned under Count and % columns
+    lh = "line-height:1.8"
+    cat_html = f'<div style="{lh}">↳ Voluntary<br>↳ B1<br>↳ B2</div>'
+    cnt_html = f'<div style="{lh}">{s1_voluntary:,}<br>{s1_b1:,}<br>{s1_b2:,}</div>'
+    pct_html = f'<div style="{lh}">{fmt_pct(s1_voluntary, s1_csps)}<br>{fmt_pct(s1_b1, s1_csps)}<br>{fmt_pct(s1_b2, s1_csps)}</div>'
     st.markdown(stage_card("STAGE 1  —  EXIT DECLARED (total in exit pipeline)", STAGE_COLORS["S1"], [
         ("CSP", s1_csps, "100.0%"),
-        ("  ↳ Voluntary", s1_voluntary, fmt_pct(s1_voluntary, s1_csps)),
-        ("  ↳ B1", s1_b1, fmt_pct(s1_b1, s1_csps)),
-        ("  ↳ B2", s1_b2, fmt_pct(s1_b2, s1_csps)),
+        (f"  {cat_html}", cnt_html, pct_html),
         ("Userbase", s1_userbase, "100.0%"),
     ]), unsafe_allow_html=True)
 
