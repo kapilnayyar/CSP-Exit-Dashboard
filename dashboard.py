@@ -811,7 +811,7 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
         ("Duplicates U2 (pending customer's netbox already at CSP)", dup, fmt_pct(dup, s5_could_not_pick_raw)),
         ("Could not pick deduped", s5_could_not_pick, fmt_pct(s5_could_not_pick, s5_liability)),
         ("Total Netbox Liability", s5_liability, "100.0%"),
-        ("Netbox collected from CSP", s5_devices_collected, fmt_pct(s5_devices_collected, s5_liability)),
+        ("Total Netbox Collected from CSP", s5_devices_collected, fmt_pct(s5_devices_collected, s5_liability)),
     ]), unsafe_allow_html=True)
 
     # ── S6 — Complete ────────────────────────────────────────────────────────
@@ -828,7 +828,7 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
         st.markdown(stage_card("STAGE 6  —  COMPLETE", STAGE_COLORS["S6"], [
             ("CSPs", s6_csps, fmt_pct(s6_csps, s1_csps)),
             ("Netbox at CSP", idle_total_s6, s6_at_pct),
-            ("Netbox collected from CSP", s6_collected, s6_col_pct),
+            ("Total Netbox Collected from CSP", s6_collected, s6_col_pct),
         ]), unsafe_allow_html=True)
 
 
