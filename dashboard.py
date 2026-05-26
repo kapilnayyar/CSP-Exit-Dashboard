@@ -369,7 +369,8 @@ def classify_u2(rows):
     swu_cohorts = Counter()
 
     for row in rows:
-        mobile = row.get("Mobile")
+        # Sheet column was renamed from "Mobile" to "Mobile no" — accept either
+        mobile = row.get("Mobile no") or row.get("Mobile")
         if not mobile or str(mobile).strip() == "":
             continue
         total += 1
@@ -616,7 +617,7 @@ def build_sheet_lookups(u1_rows, u2_rows):
     u2_picked = defaultdict(int)
     for r in u2_rows:
         name = str(r.get("Partner") or "").strip()
-        mobile = r.get("Mobile")
+        mobile = r.get("Mobile no") or r.get("Mobile")
         if not name or not mobile:
             continue
         # Map sheet name to canonical Supabase name if an alias is set
@@ -956,7 +957,7 @@ def render_tab4_search(partners, u2_rows, secrets):
         for r in u2_rows:
             if str(r.get("Partner") or "").strip().lower() != target:
                 continue
-            if not r.get("Mobile"):
+            if not (r.get("Mobile no") or r.get("Mobile")):
                 continue
             remark = str(r.get("Remarks Dropdown") or "").strip()
             collected = remark.lower() == "device picked up"
@@ -964,7 +965,7 @@ def render_tab4_search(partners, u2_rows, secrets):
             if f == "Device not collected" and collected: continue
             rows.append({
                 "Cx Name": r.get("Cx Name", ""),
-                "Mobile": r.get("Mobile", ""),
+                "Mobile": r.get("Mobile no") or r.get("Mobile", ""),
                 "Address": r.get("Address", ""),
                 "Remarks Dropdown": remark or "(blank)",
             })
@@ -1029,7 +1030,7 @@ def render():
         pending_pairs = []  # (mobile, partner_name)
         for r in u2_rows:
             partner = str(r.get("Partner") or "").strip()
-            mobile = r.get("Mobile")
+            mobile = r.get("Mobile no") or r.get("Mobile")
             if not partner or not mobile: continue
             if partner.lower() not in s5_all_lower: continue
             if str(r.get("Remarks Dropdown") or "").strip().lower() == "device picked up": continue
