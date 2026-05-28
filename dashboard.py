@@ -252,22 +252,37 @@ def metabase_id_in_list(codes):
 
 @st.cache_data(ttl=300)
 def fetch_r15_active_by_code(metabase_url, api_key, partner_codes):
-    """Return {partner_code: active_r15_count} — matches on unique partner_account_id."""
+    """Return {partner_code: active_r15_count} using the canonical Wiom R15 SQL.
+    Attribution = CURRENT serving partner via T_WG_CUSTOMER.LCO_ACCOUNT_ID.
+    Dedup: latest expiry per NAS, then latest expiry per MOBILE."""
     if not partner_codes:
         return {}
     in_list = metabase_id_in_list(partner_codes)
     if not in_list:
         return {}
-    sql = f"""SELECT sm.partner_account_id, COUNT(DISTINCT c.account_id) AS active_r15
-FROM prod_db.public.t_router_user_mapping a
-JOIN t_wg_customer c ON a.router_nas_id = c.nasid
-JOIN supply_model sm ON c.lco_account_id = sm.partner_account_id
-WHERE a.auth_state = 1
-  AND a.otp NOT IN ('FREE','PAY_ONLINE','CASH','ROAM')
-  AND a.mobile > '5999999999' AND a.device_limit = 10
-  AND CAST(a.otp_expiry_time AS DATE) >= DATEADD(day, -15, CURRENT_DATE)
-  AND CURRENT_DATE >= CAST(a.otp_issued_time AS DATE)
-  AND sm.partner_account_id IN ({in_list})
+    sql = f"""WITH partner_nas AS (
+  SELECT DISTINCT NASID, MOBILE, LCO_ACCOUNT_ID
+  FROM PUBLIC.T_WG_CUSTOMER
+  WHERE LCO_ACCOUNT_ID IN ({in_list})
+),
+live_latest AS (
+  SELECT t.ROUTER_NAS_ID, MAX(t.OTP_EXPIRY_TIME) AS LATEST_EXPIRY
+  FROM PUBLIC.T_ROUTER_USER_MAPPING t
+  WHERE t.AUTH_STATE = 1
+    AND t.OTP NOT IN ('FREE','PAY_ONLINE','CASH','ROAM')
+    AND t.MOBILE > '5999999999' AND t.DEVICE_LIMIT = 10
+  GROUP BY t.ROUTER_NAS_ID
+),
+per_mobile AS (
+  SELECT pn.LCO_ACCOUNT_ID, pn.MOBILE,
+         MAX(l.LATEST_EXPIRY) AS LATEST_EXPIRY
+  FROM partner_nas pn
+  LEFT JOIN live_latest l ON pn.NASID = l.ROUTER_NAS_ID
+  GROUP BY pn.LCO_ACCOUNT_ID, pn.MOBILE
+)
+SELECT LCO_ACCOUNT_ID,
+       COUNT_IF(LATEST_EXPIRY >= DATEADD(day, -15, CURRENT_DATE)) AS R15_ACTIVE
+FROM per_mobile
 GROUP BY 1"""
     res = metabase_query(metabase_url, api_key, sql)
     return {str(row[0]): row[1] for row in res["rows"]}
@@ -336,21 +351,33 @@ QUALIFY ROW_NUMBER() OVER (PARTITION BY mobile ORDER BY created_on DESC NULLS LA
 
 @st.cache_data(ttl=300)
 def search_active_userbase(metabase_url, api_key, partner_code):
-    """Tab 4 search 2 — list of active R15 customers for a partner (by partner_account_id)."""
-    sql = f"""SELECT
-  a.mobile,
-  c.device_id AS netbox_id,
-  CAST(a.otp_issued_time AS DATE) AS plan_start,
-  CAST(a.otp_expiry_time AS DATE) AS plan_expiry
-FROM prod_db.public.t_router_user_mapping a
-JOIN t_wg_customer c ON a.router_nas_id = c.nasid
-WHERE a.auth_state = 1
-  AND a.otp NOT IN ('FREE','PAY_ONLINE','CASH','ROAM')
-  AND a.mobile > '5999999999' AND a.device_limit = 10
-  AND CAST(a.otp_expiry_time AS DATE) >= DATEADD(day, -15, CURRENT_DATE)
-  AND CURRENT_DATE >= CAST(a.otp_issued_time AS DATE)
-  AND c.lco_account_id = {int(partner_code)}
-ORDER BY plan_expiry DESC"""
+    """Tab 4 search 2 — R15 active customers (mobile + netbox + latest expiry) for a partner.
+    Uses canonical Wiom R15 SQL: current serving partner via T_WG_CUSTOMER.LCO_ACCOUNT_ID,
+    dedup latest expiry per NAS, dedup latest expiry per MOBILE."""
+    sql = f"""WITH partner_nas AS (
+  SELECT DISTINCT NASID, MOBILE, DEVICE_ID
+  FROM PUBLIC.T_WG_CUSTOMER
+  WHERE LCO_ACCOUNT_ID = {int(partner_code)}
+),
+live_latest AS (
+  SELECT t.ROUTER_NAS_ID, MAX(t.OTP_EXPIRY_TIME) AS LATEST_EXPIRY
+  FROM PUBLIC.T_ROUTER_USER_MAPPING t
+  WHERE t.AUTH_STATE = 1
+    AND t.OTP NOT IN ('FREE','PAY_ONLINE','CASH','ROAM')
+    AND t.MOBILE > '5999999999' AND t.DEVICE_LIMIT = 10
+  GROUP BY t.ROUTER_NAS_ID
+),
+per_mobile AS (
+  SELECT pn.MOBILE, MAX(pn.DEVICE_ID) AS NETBOX_ID,
+         MAX(l.LATEST_EXPIRY) AS LATEST_EXPIRY
+  FROM partner_nas pn
+  LEFT JOIN live_latest l ON pn.NASID = l.ROUTER_NAS_ID
+  GROUP BY pn.MOBILE
+)
+SELECT MOBILE, NETBOX_ID, CAST(LATEST_EXPIRY AS DATE) AS PLAN_EXPIRY
+FROM per_mobile
+WHERE LATEST_EXPIRY >= DATEADD(day, -15, CURRENT_DATE)
+ORDER BY LATEST_EXPIRY DESC"""
     return metabase_query(metabase_url, api_key, sql)
 
 
