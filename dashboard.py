@@ -871,30 +871,13 @@ def compute_deltas(partners, yest_map, u1_by, u2_total, u2_picked, idle_by_code)
     }
 
 
-def _report_block(header_title, header_color, sections):
-    """Build one block of the daily report HTML.
-    sections: list of (subtitle, [(label, value_str), ...])."""
-    parts = [
-        f'<div style="background:{header_color};color:#ffffff;padding:10px 14px;'
-        f'font-weight:bold;font-size:14px;margin-top:14px;border-radius:6px 6px 0 0">'
-        f'{header_title}</div>'
-    ]
-    for sub_title, rows in sections:
-        parts.append(
-            f'<div style="background:#2E75B6;color:#ffffff;padding:7px 14px;'
-            f'font-weight:bold;font-size:12px;margin-top:0">{sub_title}</div>'
-        )
-        parts.append('<table class="csp-table" style="break-inside:avoid;page-break-inside:avoid">')
-        for label, value in rows:
-            parts.append(
-                f'<tr>'
-                f'<td style="background:#ffffff;color:#000000">{label}</td>'
-                f'<td style="background:#ffffff;color:#000000;text-align:right;'
-                f'font-weight:bold;width:240px">{value}</td>'
-                f'</tr>'
-            )
-        parts.append('</table>')
-    return "".join(parts)
+def _report_section_label(label, color):
+    """Small visual separator label between report sub-sections (S1-3, S4, S5-6, Deltas)."""
+    return (
+        f'<div style="background:{color};color:#ffffff;padding:8px 14px;'
+        f'font-weight:bold;font-size:13px;margin-top:24px;border-radius:6px;'
+        f'letter-spacing:1px">{label}</div>'
+    )
 
 
 def render_daily_report(m, deltas):
@@ -942,86 +925,103 @@ def render_daily_report(m, deltas):
         lines.append(f"{s6_n} {noun} {verb} successfully reached S6 with {tail}.")
     text_report = "\n".join(lines)
 
-    # ── HTML version — 3 visually separable blocks ───────────────────────────
-    block_a = _report_block("STAGES 1–3   ·   DECLARATION → BLOCKING", STAGE_COLORS["S1"], [
-        ("Stage 1 — Exit Declared (total in exit pipeline)", [
-            ("CSPs (total)", f"{m['s1_csps']:,}"),
-            ("  ↳ Voluntary", f"{m['s1_voluntary']:,} ({fmt_pct(m['s1_voluntary'], m['s1_csps'])})"),
-            ("  ↳ B1", f"{m['s1_b1']:,} ({fmt_pct(m['s1_b1'], m['s1_csps'])})"),
-            ("  ↳ B2", f"{m['s1_b2']:,} ({fmt_pct(m['s1_b2'], m['s1_csps'])})"),
-            ("Userbase", f"{m['s1_userbase']:,}"),
-        ]),
-        ("Stage 2 — Notice Period (currently serving)", [
-            ("CSPs", f"{m['s2_csps']:,}"),
-            ("Userbase", f"{m['s2_userbase']:,}"),
-        ]),
-        ("Stage 3 — Blocking", [
-            ("CSPs", f"{m['s3_csps']:,} ({fmt_pct(m['s3_csps'], m['s1_csps'])})"),
-            ("Userbase", f"{m['s3_userbase']:,} ({fmt_pct(m['s3_userbase'], m['s1_userbase'])})"),
-        ]),
-    ])
-
-    block_b = _report_block("STAGE 4   ·   EXECUTION", STAGE_COLORS["S4c"], [
-        ("Stage 4a — Execution Completed (currently in S5 or S6)", [
-            ("CSPs", f"{m['s4a_csps']:,} ({fmt_pct(m['s4a_csps'], m['s1_csps'])})"),
-            ("U1 Migration Completed", f"{m['s4a_u1_mig']:,} ({u1_conv})"),
-            ("U2 Netbox Picked by Wiom", f"{m['s4a_u2_pick']:,} ({u2_conv})"),
-        ]),
-        ("Stage 4b — Execution In Process (currently in S4)", [
-            ("CSPs", f"{m['s4b_csps']:,} ({fmt_pct(m['s4b_csps'], m['s1_csps'])})"),
-            ("U1 Userbase", f"{m['s4b_u1']:,}"),
-            ("Migration Done", f"{m['s4b_u1_mig']:,} ({fmt_pct(m['s4b_u1_mig'], m['s4b_u1'])})"),
-            ("U2 Userbase", f"{m['s4b_u2']:,}"),
-            ("Netbox Pickup Done", f"{m['s4b_u2_pick']:,} ({fmt_pct(m['s4b_u2_pick'], m['s4b_u2'])})"),
-            ("Userbase Pending to Add", f"{m['s4b_pending']:,}"),
-        ]),
-    ])
-
-    # Block C: S5 + S6 + Today's Deltas
-    delta_rows = []
-    if deltas['has_yesterday']:
-        if deltas['movers_s4_to_s5']:
-            delta_rows.append(("CSPs moved S4 → S5", f"{len(deltas['movers_s4_to_s5']):,}"))
-            delta_rows.append(("  ↳ U1 migrations completed in those", f"{deltas['movers_u1_mig']:,}"))
-            delta_rows.append(("  ↳ U2 pickups completed in those", f"{deltas['movers_u2_pick']:,}"))
-            delta_rows.append(("  ↳ Total device liability of those CSPs", f"{deltas['movers_liability']:,}"))
-        if deltas['movers_s5_to_s6']:
-            delta_rows.append(("CSPs moved S5 → S6", f"{len(deltas['movers_s5_to_s6']):,}"))
-        delta_rows.append(("Δ U1 migrations done (existing S5/S6)", f"+{deltas['delta_u1_mig_existing']:,}"))
-        delta_rows.append(("Δ U2 pickups done (existing S5/S6)", f"+{deltas['delta_u2_pick_existing']:,}"))
-        any_change = (deltas['movers_s4_to_s5'] or deltas['movers_s5_to_s6']
-                      or deltas['delta_u1_mig_existing'] or deltas['delta_u2_pick_existing'])
-        if not any_change:
-            delta_rows = [("No state changes or progress since yesterday", "—")]
-    else:
-        delta_rows = [("Δ vs yesterday", "Will be available tomorrow")]
-
-    block_c = _report_block("STAGES 5–6   ·   RECONCILIATION  +  TODAY'S DELTAS", STAGE_COLORS["S5"], [
-        ("Stage 5 — Reconciliation (FNF process)", [
-            ("CSPs", f"{m['s5_csps']:,} ({fmt_pct(m['s5_csps'], m['s1_csps'])})"),
-            ("Netbox at CSPs", f"{m['s5_idle']:,}"),
-            ("Could not pick (deduped)", f"{m['s5_could_not_pick']:,}"),
-            ("Total Netbox Liability", f"{m['s5_liability']:,}"),
-            ("Total Netbox Collected from CSP", f"{m.get('s5_collected', 0):,}"),
-        ]),
-        ("Stage 6 — Complete", [
-            ("CSPs", f"{m['s6_csps']:,} ({fmt_pct(m['s6_csps'], m['s1_csps'])})"),
-            ("Netbox at CSP", f"{m.get('s6_idle', 0):,}"),
-            ("Total Netbox Collected from CSP", f"{m.get('s6_collected', 0):,}"),
-        ]),
-        ("Today's Deltas vs yesterday", delta_rows),
-    ])
-
-    # ── Render to Streamlit ──────────────────────────────────────────────────
+    # ── HTML version — uses the same stage_card() styling as the funnel above
     st.markdown(
         f'<div style="background:#1F4E78;color:#ffffff;padding:14px;border-radius:8px;'
         f'font-size:17px;font-weight:bold;text-align:center;margin-top:24px;margin-bottom:6px">'
         f'📋 DAILY EXIT REPORT — {today_str}</div>',
         unsafe_allow_html=True,
     )
-    st.markdown(block_a, unsafe_allow_html=True)
-    st.markdown(block_b, unsafe_allow_html=True)
-    st.markdown(block_c, unsafe_allow_html=True)
+
+    # ─ Section header: Stages 1-3 ─
+    st.markdown(_report_section_label("SECTION A · STAGES 1–3 (Declaration → Blocking)", "#1F4E78"), unsafe_allow_html=True)
+
+    # S1
+    st.markdown(stage_card("STAGE 1  —  EXIT DECLARED (total in exit pipeline)", STAGE_COLORS["S1"], [
+        ("CSP", m['s1_csps'], "100.0%"),
+        ("  • Voluntary", m['s1_voluntary'], fmt_pct(m['s1_voluntary'], m['s1_csps'])),
+        ("  • B1", m['s1_b1'], fmt_pct(m['s1_b1'], m['s1_csps'])),
+        ("  • B2", m['s1_b2'], fmt_pct(m['s1_b2'], m['s1_csps'])),
+        ("Userbase", m['s1_userbase'], "100.0%"),
+    ]), unsafe_allow_html=True)
+
+    # S2
+    st.markdown(stage_card("STAGE 2  —  NOTICE PERIOD (currently serving)", STAGE_COLORS["S2"], [
+        ("CSPs", m['s2_csps'], fmt_pct(m['s2_csps'], m['s1_csps'])),
+        ("Userbase", m['s2_userbase'], fmt_pct(m['s2_userbase'], m['s1_userbase'])),
+    ]), unsafe_allow_html=True)
+
+    # S3
+    st.markdown(stage_card("STAGE 3  —  BLOCKING", STAGE_COLORS["S3"], [
+        ("CSPs", m['s3_csps'], fmt_pct(m['s3_csps'], m['s1_csps'])),
+        ("Userbase", m['s3_userbase'], fmt_pct(m['s3_userbase'], m['s1_userbase'])),
+    ]), unsafe_allow_html=True)
+
+    # ─ Section header: Stage 4 ─
+    st.markdown(_report_section_label("SECTION B · STAGE 4 (Execution)", "#548235"), unsafe_allow_html=True)
+
+    # S4a
+    st.markdown(stage_card("STAGE 4a  —  EXECUTION COMPLETED (currently in S5 or S6)", STAGE_COLORS["S4c"], [
+        ("CSPs", m['s4a_csps'], fmt_pct(m['s4a_csps'], m['s1_csps'])),
+        ("U1 Migration Completed", m['s4a_u1_mig'], u1_conv),
+        ("U2 Netbox Picked by Wiom", m['s4a_u2_pick'], u2_conv),
+    ]), unsafe_allow_html=True)
+
+    # S4b
+    s4b_total_ub = m['s4b_u1'] + m['s4b_u2'] + m['s4b_pending']
+    st.markdown(stage_card("STAGE 4b  —  EXECUTION IN PROCESS (currently in S4)", STAGE_COLORS["S4a"], [
+        ("CSPs", m['s4b_csps'], fmt_pct(m['s4b_csps'], m['s1_csps'])),
+        ("U1 Userbase", m['s4b_u1'], fmt_pct(m['s4b_u1'], s4b_total_ub)),
+        ("Migration Done", m['s4b_u1_mig'], fmt_pct(m['s4b_u1_mig'], m['s4b_u1'])),
+        ("U2 Userbase", m['s4b_u2'], fmt_pct(m['s4b_u2'], s4b_total_ub)),
+        ("Netbox Pickup Done", m['s4b_u2_pick'], fmt_pct(m['s4b_u2_pick'], m['s4b_u2'])),
+        ("Userbase Pending to Add", m['s4b_pending'], fmt_pct(m['s4b_pending'], s4b_total_ub)),
+    ]), unsafe_allow_html=True)
+
+    # ─ Section header: Stage 5-6 + Deltas ─
+    st.markdown(_report_section_label("SECTION C · STAGES 5–6 + TODAY'S DELTAS", "#9C0006"), unsafe_allow_html=True)
+
+    # S5
+    st.markdown(stage_card("STAGE 5  —  RECONCILIATION (FNF process)", STAGE_COLORS["S5"], [
+        ("CSPs", m['s5_csps'], fmt_pct(m['s5_csps'], m['s1_csps'])),
+        ("Netbox at CSPs", m['s5_idle'], fmt_pct(m['s5_idle'], m['s5_liability'])),
+        ("Could not pick (deduped)", m['s5_could_not_pick'], fmt_pct(m['s5_could_not_pick'], m['s5_liability'])),
+        ("Total Netbox Liability", m['s5_liability'], "100.0%"),
+        ("Total Netbox Collected from CSP", m.get('s5_collected', 0), fmt_pct(m.get('s5_collected', 0), m['s5_liability'])),
+    ]), unsafe_allow_html=True)
+
+    # S6
+    s6_idle = m.get('s6_idle', 0)
+    s6_collected = m.get('s6_collected', 0)
+    s6_total = s6_idle + s6_collected
+    st.markdown(stage_card("STAGE 6  —  COMPLETE", STAGE_COLORS["S6"], [
+        ("CSPs", m['s6_csps'], fmt_pct(m['s6_csps'], m['s1_csps'])),
+        ("Netbox at CSP", s6_idle, fmt_pct(s6_idle, s6_total) if s6_total else "0.0%"),
+        ("Total Netbox Collected from CSP", s6_collected, fmt_pct(s6_collected, s6_total) if s6_total else "0.0%"),
+    ]), unsafe_allow_html=True)
+
+    # Today's Deltas
+    if deltas['has_yesterday']:
+        delta_rows = []
+        if deltas['movers_s4_to_s5']:
+            n = len(deltas['movers_s4_to_s5'])
+            delta_rows.append(("CSPs moved S4 → S5", n, fmt_pct(n, m['s1_csps'])))
+            delta_rows.append(("  • U1 migrations completed in those", deltas['movers_u1_mig'], ""))
+            delta_rows.append(("  • U2 pickups completed in those", deltas['movers_u2_pick'], ""))
+            delta_rows.append(("  • Total device liability of those CSPs", deltas['movers_liability'], ""))
+        if deltas['movers_s5_to_s6']:
+            n = len(deltas['movers_s5_to_s6'])
+            delta_rows.append(("CSPs moved S5 → S6", n, fmt_pct(n, m['s1_csps'])))
+        delta_rows.append(("Δ U1 migrations done (existing S5/S6)", deltas['delta_u1_mig_existing'], ""))
+        delta_rows.append(("Δ U2 pickups done (existing S5/S6)", deltas['delta_u2_pick_existing'], ""))
+        any_change = (deltas['movers_s4_to_s5'] or deltas['movers_s5_to_s6']
+                      or deltas['delta_u1_mig_existing'] or deltas['delta_u2_pick_existing'])
+        if not any_change:
+            delta_rows = [("No state changes or progress since yesterday", 0, "—")]
+    else:
+        delta_rows = [("Δ vs yesterday", 0, "Will be available tomorrow")]
+
+    st.markdown(stage_card("📊  TODAY'S DELTAS — vs yesterday's snapshot", "#404040", delta_rows), unsafe_allow_html=True)
 
     st.markdown("**📝 Text version (copy & paste into Slack):**")
     st.code(text_report, language=None)
