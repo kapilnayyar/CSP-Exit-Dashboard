@@ -14,7 +14,7 @@ import requests
 from google.oauth2.service_account import Credentials
 from streamlit_autorefresh import st_autorefresh
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import hashlib
 import json
@@ -105,6 +105,12 @@ def get_secrets():
 
 U2_TAB = "Main sheet"
 U1_TAB = "Migration Data"
+SNAPSHOT_TAB = "Daily Snapshots"
+SNAPSHOT_HEADERS = [
+    "snapshot_date", "partner_code", "partner_name", "current_state",
+    "u1_total", "u1_migrated", "u2_total", "u2_picked",
+    "netbox_idle", "netbox_collected",
+]
 
 
 @st.cache_data(ttl=30)
@@ -113,7 +119,7 @@ def fetch_sheets(sheet_id, gcp_creds):
     creds = Credentials.from_service_account_info(
         gcp_creds,
         scopes=[
-            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive.readonly",
         ],
     )
@@ -134,7 +140,7 @@ def fetch_netbox_collection(sheet_id, gcp_creds):
     creds = Credentials.from_service_account_info(
         gcp_creds,
         scopes=[
-            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive.readonly",
         ],
     )
@@ -301,6 +307,22 @@ FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
 WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" IN ({in_list})"""
     res = metabase_query(metabase_url, api_key, sql)
     return res["rows"][0][0] if res["rows"] else 0
+
+
+@st.cache_data(ttl=300)
+def fetch_idle_devices_by_code(metabase_url, api_key, partner_codes):
+    """Return {partner_code: count_idle_devices}. Used for per-partner snapshot row."""
+    if not partner_codes:
+        return {}
+    in_list = metabase_id_in_list(partner_codes)
+    if not in_list:
+        return {}
+    sql = f"""SELECT td."LCO_ACCOUNT_ID", COUNT(*) AS idle_cnt
+FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
+WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" IN ({in_list})
+GROUP BY 1"""
+    res = metabase_query(metabase_url, api_key, sql)
+    return {str(row[0]): row[1] for row in res["rows"]}
 
 
 @st.cache_data(ttl=300)
@@ -716,7 +738,296 @@ def fmt_pct(n, denom):
     return f"{(n / denom * 100):.1f}%"
 
 
-def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup, idle_total_s6=0, netbox_collected_by_code=None):
+# ─────────────────────────────────────────────────────────────────────────────
+# DAILY SNAPSHOT + DELTA + REPORT
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_or_create_snapshot_tab(book):
+    """Return the snapshot worksheet, creating it (with header row) if missing."""
+    try:
+        return book.worksheet(SNAPSHOT_TAB)
+    except gspread.WorksheetNotFound:
+        ws = book.add_worksheet(title=SNAPSHOT_TAB, rows=20000, cols=len(SNAPSHOT_HEADERS))
+        ws.append_row(SNAPSHOT_HEADERS)
+        return ws
+
+
+def capture_snapshot_if_needed(book, partners, u1_by, u2_total, u2_picked,
+                               netbox_collected_by_code, idle_by_code, force=False):
+    """Append today's per-partner snapshot rows to the 'Daily Snapshots' tab.
+    Idempotent: skips if today's date already has any row, unless force=True."""
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    try:
+        ws = _get_or_create_snapshot_tab(book)
+    except Exception as e:
+        return False, f"Failed to access snapshot tab: {e}"
+
+    if not force:
+        try:
+            existing_dates = set(ws.col_values(1)[1:])
+        except Exception:
+            existing_dates = set()
+        if today_str in existing_dates:
+            return False, "Today's snapshot already captured"
+
+    rows = []
+    for p in partners:
+        name = p.get("name", "") or ""
+        key = name.lower()
+        u1d = u1_by.get(key, {"total": 0, "migrated": 0})
+        code = str(p.get("partner_code") or "")
+        rows.append([
+            today_str,
+            code,
+            name,
+            p.get("current_state", "") or "",
+            int(u1d.get("total", 0) or 0),
+            int(u1d.get("migrated", 0) or 0),
+            int(u2_total.get(key, 0) or 0),
+            int(u2_picked.get(key, 0) or 0),
+            int(idle_by_code.get(code, 0) or 0),
+            int(netbox_collected_by_code.get(code, 0) or 0),
+        ])
+    if not rows:
+        return False, "No partners to snapshot"
+    try:
+        ws.append_rows(rows, value_input_option="USER_ENTERED")
+    except Exception as e:
+        return False, f"Failed to append snapshot rows: {e}"
+    return True, f"Captured snapshot for {today_str}: {len(rows)} CSPs"
+
+
+def fetch_yesterday_snapshot(book):
+    """Return {partner_code: row_dict} for yesterday's snapshot rows."""
+    try:
+        ws = book.worksheet(SNAPSHOT_TAB)
+    except Exception:
+        return {}
+    try:
+        rows = ws.get_all_records()
+    except Exception:
+        return {}
+    yesterday = (datetime.now(IST) - timedelta(days=1)).strftime("%Y-%m-%d")
+    out = {}
+    for r in rows:
+        if str(r.get("snapshot_date") or "").strip() == yesterday:
+            code = str(r.get("partner_code") or "").strip()
+            if code:
+                out[code] = r
+    return out
+
+
+def compute_deltas(partners, yest_map, u1_by, u2_total, u2_picked, idle_by_code):
+    """Compute today-vs-yesterday transitions and progress."""
+    movers_s4_to_s5 = []
+    movers_s5_to_s6 = []
+    delta_u1_mig_existing = 0
+    delta_u2_pick_existing = 0
+
+    def _ti(v):
+        try: return int(float(v or 0))
+        except (TypeError, ValueError): return 0
+
+    for p in partners:
+        code = str(p.get("partner_code") or "")
+        name = p.get("name", "") or ""
+        key = name.lower()
+        curr_state = p.get("current_state", "") or ""
+        y = yest_map.get(code)
+        if not y:
+            continue
+        y_state = str(y.get("current_state") or "").strip()
+        if y_state == "S4" and curr_state == "S5":
+            movers_s4_to_s5.append(p)
+        elif y_state == "S5" and curr_state == "S6":
+            movers_s5_to_s6.append(p)
+        if y_state == curr_state and curr_state in ("S5", "S6"):
+            curr_u1_mig = u1_by.get(key, {}).get("migrated", 0)
+            curr_u2_pick = u2_picked.get(key, 0)
+            delta_u1_mig_existing += max(curr_u1_mig - _ti(y.get("u1_migrated")), 0)
+            delta_u2_pick_existing += max(curr_u2_pick - _ti(y.get("u2_picked")), 0)
+
+    # Movers' aggregated metrics (for the "Additionally..." sentence)
+    movers_u1_mig = sum(u1_by.get(p["name"].lower(), {}).get("migrated", 0) for p in movers_s4_to_s5)
+    movers_u2_pick = sum(u2_picked.get(p["name"].lower(), 0) for p in movers_s4_to_s5)
+    movers_liability = 0
+    for p in movers_s4_to_s5:
+        code = str(p.get("partner_code") or "")
+        key = p["name"].lower()
+        u1d = u1_by.get(key, {"total": 0, "migrated": 0})
+        u1_pend = max(u1d["total"] - u1d["migrated"], 0)
+        u2_pend = max(u2_total.get(key, 0) - u2_picked.get(key, 0), 0)
+        movers_liability += idle_by_code.get(code, 0) + u1_pend + u2_pend
+
+    return {
+        "has_yesterday": bool(yest_map),
+        "movers_s4_to_s5": movers_s4_to_s5,
+        "movers_s5_to_s6": movers_s5_to_s6,
+        "movers_u1_mig": movers_u1_mig,
+        "movers_u2_pick": movers_u2_pick,
+        "movers_liability": movers_liability,
+        "delta_u1_mig_existing": delta_u1_mig_existing,
+        "delta_u2_pick_existing": delta_u2_pick_existing,
+    }
+
+
+def _report_block(header_title, header_color, sections):
+    """Build one block of the daily report HTML.
+    sections: list of (subtitle, [(label, value_str), ...])."""
+    parts = [
+        f'<div style="background:{header_color};color:#ffffff;padding:10px 14px;'
+        f'font-weight:bold;font-size:14px;margin-top:14px;border-radius:6px 6px 0 0">'
+        f'{header_title}</div>'
+    ]
+    for sub_title, rows in sections:
+        parts.append(
+            f'<div style="background:#2E75B6;color:#ffffff;padding:7px 14px;'
+            f'font-weight:bold;font-size:12px;margin-top:0">{sub_title}</div>'
+        )
+        parts.append('<table class="csp-table" style="break-inside:avoid;page-break-inside:avoid">')
+        for label, value in rows:
+            parts.append(
+                f'<tr>'
+                f'<td style="background:#ffffff;color:#000000">{label}</td>'
+                f'<td style="background:#ffffff;color:#000000;text-align:right;'
+                f'font-weight:bold;width:240px">{value}</td>'
+                f'</tr>'
+            )
+        parts.append('</table>')
+    return "".join(parts)
+
+
+def render_daily_report(m, deltas):
+    """Render the daily report (HTML 3-block + plain text with copy button) at the bottom of Tab 2."""
+    today_str = datetime.now(IST).strftime("%d-%b-%Y")
+
+    # ── Plain text version (for Slack copy-paste) ────────────────────────────
+    lines = ["Please find the exit CSPs report as of today", ""]
+    lines.append(
+        f"A total of {m['s1_csps']:,} CSPs with a user base of {m['s1_userbase']:,} have entered the exit process."
+    )
+    lines.append(
+        f"Blocking has been completed for {m['s3_csps']:,} CSPs, "
+        f"covering a user base of {m['s3_userbase']:,}."
+    )
+    lines.append(
+        f"The S4 stage has been completed for {m['s4a_csps']:,} CSPs with a user base of {m['s4a_userbase']:,}, "
+        f"while {m['s4b_csps']:,} CSPs with a user base of {m['s4b_userbase']:,} are currently in the S4 stage."
+    )
+    lines.append(
+        f"{m['s5_csps']:,} CSPs have progressed to S5, with a total Netbox liability of {m['s5_liability']:,}."
+    )
+    u1_conv = fmt_pct(m['s4a_u1_mig'], m['s4a_u1_total']) or "0.0%"
+    u2_conv = fmt_pct(m['s4a_u2_pick'], m['s4a_u2_total']) or "0.0%"
+    lines.append(
+        f"Migration of {m['s4a_u1_mig']:,} U1 customers with {u1_conv} of conversion "
+        f"and {m['s4a_u2_pick']:,} U2 customers Device picked up with {u2_conv} of conversion "
+        f"for {m['s4a_csps']:,} CSPs."
+    )
+    if deltas['has_yesterday'] and deltas['movers_s4_to_s5']:
+        mc = len(deltas['movers_s4_to_s5'])
+        u1_word = "migration" if deltas['movers_u1_mig'] == 1 else "migrations"
+        u2_word = "device pickup" if deltas['movers_u2_pick'] == 1 else "device pickups"
+        lines.append(
+            f"Additionally, for the {mc} CSPs that recently progressed from S4 to S5, "
+            f"{deltas['movers_u1_mig']:,} U1 {u1_word} and "
+            f"{deltas['movers_u2_pick']:,} U2 {u2_word} have been completed. "
+            f"The total device liability for these CSPs is {deltas['movers_liability']:,}."
+        )
+    s6_n = m['s6_csps']; s6_pending = m.get('s6_idle', 0)
+    if s6_n > 0:
+        verb = "has" if s6_n == 1 else "have"
+        noun = "CSP" if s6_n == 1 else "CSPs"
+        tail = "zero pending Netbox liability" if s6_pending == 0 else f"{s6_pending:,} pending Netbox liability"
+        lines.append(f"{s6_n} {noun} {verb} successfully reached S6 with {tail}.")
+    text_report = "\n".join(lines)
+
+    # ── HTML version — 3 visually separable blocks ───────────────────────────
+    block_a = _report_block("STAGES 1–3   ·   DECLARATION → BLOCKING", STAGE_COLORS["S1"], [
+        ("Stage 1 — Exit Declared (total in exit pipeline)", [
+            ("CSPs (total)", f"{m['s1_csps']:,}"),
+            ("  ↳ Voluntary", f"{m['s1_voluntary']:,} ({fmt_pct(m['s1_voluntary'], m['s1_csps'])})"),
+            ("  ↳ B1", f"{m['s1_b1']:,} ({fmt_pct(m['s1_b1'], m['s1_csps'])})"),
+            ("  ↳ B2", f"{m['s1_b2']:,} ({fmt_pct(m['s1_b2'], m['s1_csps'])})"),
+            ("Userbase", f"{m['s1_userbase']:,}"),
+        ]),
+        ("Stage 2 — Notice Period (currently serving)", [
+            ("CSPs", f"{m['s2_csps']:,}"),
+            ("Userbase", f"{m['s2_userbase']:,}"),
+        ]),
+        ("Stage 3 — Blocking", [
+            ("CSPs", f"{m['s3_csps']:,} ({fmt_pct(m['s3_csps'], m['s1_csps'])})"),
+            ("Userbase", f"{m['s3_userbase']:,} ({fmt_pct(m['s3_userbase'], m['s1_userbase'])})"),
+        ]),
+    ])
+
+    block_b = _report_block("STAGE 4   ·   EXECUTION", STAGE_COLORS["S4c"], [
+        ("Stage 4a — Execution Completed (currently in S5 or S6)", [
+            ("CSPs", f"{m['s4a_csps']:,} ({fmt_pct(m['s4a_csps'], m['s1_csps'])})"),
+            ("U1 Migration Completed", f"{m['s4a_u1_mig']:,} ({u1_conv})"),
+            ("U2 Netbox Picked by Wiom", f"{m['s4a_u2_pick']:,} ({u2_conv})"),
+        ]),
+        ("Stage 4b — Execution In Process (currently in S4)", [
+            ("CSPs", f"{m['s4b_csps']:,} ({fmt_pct(m['s4b_csps'], m['s1_csps'])})"),
+            ("U1 Userbase", f"{m['s4b_u1']:,}"),
+            ("Migration Done", f"{m['s4b_u1_mig']:,} ({fmt_pct(m['s4b_u1_mig'], m['s4b_u1'])})"),
+            ("U2 Userbase", f"{m['s4b_u2']:,}"),
+            ("Netbox Pickup Done", f"{m['s4b_u2_pick']:,} ({fmt_pct(m['s4b_u2_pick'], m['s4b_u2'])})"),
+            ("Userbase Pending to Add", f"{m['s4b_pending']:,}"),
+        ]),
+    ])
+
+    # Block C: S5 + S6 + Today's Deltas
+    delta_rows = []
+    if deltas['has_yesterday']:
+        if deltas['movers_s4_to_s5']:
+            delta_rows.append(("CSPs moved S4 → S5", f"{len(deltas['movers_s4_to_s5']):,}"))
+            delta_rows.append(("  ↳ U1 migrations completed in those", f"{deltas['movers_u1_mig']:,}"))
+            delta_rows.append(("  ↳ U2 pickups completed in those", f"{deltas['movers_u2_pick']:,}"))
+            delta_rows.append(("  ↳ Total device liability of those CSPs", f"{deltas['movers_liability']:,}"))
+        if deltas['movers_s5_to_s6']:
+            delta_rows.append(("CSPs moved S5 → S6", f"{len(deltas['movers_s5_to_s6']):,}"))
+        delta_rows.append(("Δ U1 migrations done (existing S5/S6)", f"+{deltas['delta_u1_mig_existing']:,}"))
+        delta_rows.append(("Δ U2 pickups done (existing S5/S6)", f"+{deltas['delta_u2_pick_existing']:,}"))
+        any_change = (deltas['movers_s4_to_s5'] or deltas['movers_s5_to_s6']
+                      or deltas['delta_u1_mig_existing'] or deltas['delta_u2_pick_existing'])
+        if not any_change:
+            delta_rows = [("No state changes or progress since yesterday", "—")]
+    else:
+        delta_rows = [("Δ vs yesterday", "Will be available tomorrow")]
+
+    block_c = _report_block("STAGES 5–6   ·   RECONCILIATION  +  TODAY'S DELTAS", STAGE_COLORS["S5"], [
+        ("Stage 5 — Reconciliation (FNF process)", [
+            ("CSPs", f"{m['s5_csps']:,} ({fmt_pct(m['s5_csps'], m['s1_csps'])})"),
+            ("Netbox at CSPs", f"{m['s5_idle']:,}"),
+            ("Could not pick (deduped)", f"{m['s5_could_not_pick']:,}"),
+            ("Total Netbox Liability", f"{m['s5_liability']:,}"),
+            ("Total Netbox Collected from CSP", f"{m.get('s5_collected', 0):,}"),
+        ]),
+        ("Stage 6 — Complete", [
+            ("CSPs", f"{m['s6_csps']:,} ({fmt_pct(m['s6_csps'], m['s1_csps'])})"),
+            ("Netbox at CSP", f"{m.get('s6_idle', 0):,}"),
+            ("Total Netbox Collected from CSP", f"{m.get('s6_collected', 0):,}"),
+        ]),
+        ("Today's Deltas vs yesterday", delta_rows),
+    ])
+
+    # ── Render to Streamlit ──────────────────────────────────────────────────
+    st.markdown(
+        f'<div style="background:#1F4E78;color:#ffffff;padding:14px;border-radius:8px;'
+        f'font-size:17px;font-weight:bold;text-align:center;margin-top:24px;margin-bottom:6px">'
+        f'📋 DAILY EXIT REPORT — {today_str}</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(block_a, unsafe_allow_html=True)
+    st.markdown(block_b, unsafe_allow_html=True)
+    st.markdown(block_c, unsafe_allow_html=True)
+
+    st.markdown("**📝 Text version (copy & paste into Slack):**")
+    st.code(text_report, language=None)
+
+
+def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup, idle_total_s6=0, netbox_collected_by_code=None, deltas=None, book=None, idle_by_code=None):
     """Tab 2 — funnel. S1/S2/S3 are cumulative; S4a/S4b/S5/S6 are current snapshots.
     % computed against S1 totals."""
     by_state = defaultdict(list)
@@ -876,6 +1187,48 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
             ("Netbox at CSP", idle_total_s6, s6_at_pct),
             ("Total Netbox Collected from CSP", s6_collected, s6_col_pct),
         ]), unsafe_allow_html=True)
+    else:
+        s6_collected = 0
+
+    # ── DAILY EXIT REPORT (HTML + text) ──────────────────────────────────────
+    metrics = {
+        "s1_csps": s1_csps, "s1_userbase": s1_userbase,
+        "s1_voluntary": s1_voluntary, "s1_b1": s1_b1, "s1_b2": s1_b2,
+        "s2_csps": s2_csps, "s2_userbase": s2_userbase,
+        "s3_csps": s3_csps, "s3_userbase": s3_userbase,
+        "s4a_csps": s4a_csps_completed,
+        "s4a_u1_total": s4a_u1_total, "s4a_u1_mig": s4a_u1_mig,
+        "s4a_u2_total": s4a_u2_total, "s4a_u2_pick": s4a_u2_pick,
+        "s4a_userbase": s4a_u1_total + s4a_u2_total,
+        "s4b_csps": s4b_csps,
+        "s4b_u1": s4b_u1, "s4b_u1_mig": s4b_u1_mig,
+        "s4b_u2": s4b_u2, "s4b_u2_pick": s4b_u2_pick,
+        "s4b_pending": s4b_pending,
+        "s4b_userbase": s4b_u1 + s4b_u2,
+        "s5_csps": len(s5_partners), "s5_idle": idle_total,
+        "s5_could_not_pick": s5_could_not_pick, "s5_liability": s5_liability,
+        "s5_collected": s5_devices_collected,
+        "s6_csps": s6_csps, "s6_idle": idle_total_s6, "s6_collected": s6_collected,
+    }
+    deltas_to_show = deltas or {
+        "has_yesterday": False,
+        "movers_s4_to_s5": [], "movers_s5_to_s6": [],
+        "movers_u1_mig": 0, "movers_u2_pick": 0, "movers_liability": 0,
+        "delta_u1_mig_existing": 0, "delta_u2_pick_existing": 0,
+    }
+    render_daily_report(metrics, deltas_to_show)
+
+    # Manual snapshot capture button (force=True overrides idempotency check)
+    if book is not None and idle_by_code is not None:
+        if st.button("📸 Capture today's snapshot now", key="manual_snapshot"):
+            ok, msg = capture_snapshot_if_needed(
+                book, partners, u1_by, u2_total, u2_picked,
+                netbox_collected_by_code or {}, idle_by_code, force=True,
+            )
+            if ok:
+                st.success(msg)
+            else:
+                st.warning(msg)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1049,6 +1402,10 @@ def render():
     idle_total_s6 = fetch_idle_devices_total(
         secrets["metabase_url"], secrets["metabase_key"], s6_codes,
     ) if s6_codes else 0
+    # Per-partner IDLE counts (for daily snapshot rows)
+    idle_by_code = fetch_idle_devices_by_code(
+        secrets["metabase_url"], secrets["metabase_key"], all_codes,
+    ) if secrets.get("metabase_key") else {}
 
     # ── S5 dedup: U2 pending customers whose netbox is already IDLE at CSP ───
     s5_dedup = {"duplicates": 0}
@@ -1094,13 +1451,38 @@ def render():
         unsafe_allow_html=True,
     )
 
+    # ── Snapshot capture + delta computation (powers the daily report) ───────
+    # Open a writable gspread workbook for snapshot writes
+    book = None
+    yest_map = {}
+    try:
+        _creds = Credentials.from_service_account_info(
+            secrets["gcp_creds"],
+            scopes=["https://www.googleapis.com/auth/spreadsheets",
+                    "https://www.googleapis.com/auth/drive.readonly"],
+        )
+        book = gspread.authorize(_creds).open_by_key(secrets["sheet_id"])
+        # Auto-capture today's snapshot (idempotent)
+        capture_snapshot_if_needed(
+            book, partners, u1_by, u2_total, u2_picked,
+            netbox_collected_by_code, idle_by_code,
+        )
+        yest_map = fetch_yesterday_snapshot(book)
+    except Exception:
+        pass
+    deltas = compute_deltas(partners, yest_map, u1_by, u2_total, u2_picked, idle_by_code)
+
     tab1, tab2, tab3, tab4 = st.tabs([
         "Status & Cohorts", "CSP Exit Funnel", "Data Quality", "Search",
     ])
     with tab1:
         render_tab1_status(u1, u2)
     with tab2:
-        render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup, idle_total_s6, netbox_collected_by_code)
+        render_tab2_funnel(
+            partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total,
+            s5_dedup, idle_total_s6, netbox_collected_by_code,
+            deltas=deltas, book=book, idle_by_code=idle_by_code,
+        )
     with tab3:
         render_tab3_data_quality(partners, u1_by, u2_total, r15_by)
     with tab4:
