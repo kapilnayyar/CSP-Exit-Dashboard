@@ -967,11 +967,14 @@ def stage_card_with_delta(stage_label, color, rows):
         if isinstance(value, int):
             v_str = f"{value:,}"
             if pct_str:
-                v_cell = f'<b>{v_str}</b> <span style="color:#666">({pct_str})</span>'
+                v_cell = (
+                    f'<span style="display:inline-block;width:60px;text-align:right;font-weight:bold">{v_str}</span>'
+                    f'<span style="display:inline-block;width:70px;text-align:right;color:#666">({pct_str})</span>'
+                )
             else:
                 v_cell = f'<b>{v_str}</b>'
         else:
-            # value is already HTML (e.g. multi-line S1 cell) — pct_str also HTML
+            # value is already HTML (e.g. multi-line S1 cell) — pct_str ignored
             v_cell = str(value)
         if isinstance(dm1, int):
             dm1_str = f"{dm1:,}"
@@ -1056,12 +1059,26 @@ def render_tab5_funnel_with_delta(m, y):
         f'<span style="color:#666">&nbsp;&nbsp;&nbsp;&nbsp;&bull;&nbsp;B1</span><br>'
         f'<span style="color:#666">&nbsp;&nbsp;&nbsp;&nbsp;&bull;&nbsp;B2</span></div>'
     )
+    def _pair(num, pct, bold=False):
+        """Render 'NN,NNN  (XX.X%)' with the number and pct each in fixed-width
+        inline-blocks so multiple lines align as two vertical columns."""
+        nspan = (
+            f'<span style="display:inline-block;width:60px;text-align:right'
+            + (";font-weight:bold" if bold else ";color:#666")
+            + f'">{num:,}</span>'
+        )
+        pspan = (
+            f'<span style="display:inline-block;width:70px;text-align:right;color:#666">'
+            f'({pct})</span>'
+        )
+        return nspan + pspan
+
     s1_cnt_html = (
         f'<div style="{lh}">'
-        f'<b>{m["s1_csps"]:,}</b> <span style="color:#666">(100.0%)</span><br>'
-        f'<span style="color:#666">{m["s1_voluntary"]:,} ({fmt_pct(m["s1_voluntary"], m["s1_csps"])})</span><br>'
-        f'<span style="color:#666">{m["s1_b1"]:,} ({fmt_pct(m["s1_b1"], m["s1_csps"])})</span><br>'
-        f'<span style="color:#666">{m["s1_b2"]:,} ({fmt_pct(m["s1_b2"], m["s1_csps"])})</span></div>'
+        f'{_pair(m["s1_csps"], "100.0%", bold=True)}<br>'
+        f'{_pair(m["s1_voluntary"], fmt_pct(m["s1_voluntary"], m["s1_csps"]))}<br>'
+        f'{_pair(m["s1_b1"], fmt_pct(m["s1_b1"], m["s1_csps"]))}<br>'
+        f'{_pair(m["s1_b2"], fmt_pct(m["s1_b2"], m["s1_csps"]))}</div>'
     )
     s1_pct_html = ""  # % is now baked into s1_cnt_html
     s1_dm1_html = (
