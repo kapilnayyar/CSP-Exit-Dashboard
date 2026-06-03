@@ -327,11 +327,23 @@ GROUP BY 1"""
 
 @st.cache_data(ttl=300)
 def search_devices_at_partner(metabase_url, api_key, partner_code):
-    """Tab 4 search 1 — list of IDLE devices for a partner (by partner_account_id)."""
-    sql = f"""SELECT td."DEVICE_ID", td."MAC", td."SERIAL", td."MODEL", td."STATUS", td."ADDED_TIME"
+    """Tab 4 search 1 — IDLE devices for a partner.
+    Mirrors Metabase Q11266 'At Partner Device IDLE' which filters by PARTNER_ID
+    (= LCO_ACCOUNT_ID) — immune to the supply_model.partner_name whitespace bug
+    that affects the older partner_name-based card Q10398."""
+    sql = f"""SELECT
+  td."DEVICE_ID",
+  td."MAC",
+  td."SERIAL",
+  td."MODEL",
+  td."STATUS",
+  td."LCO_ACCOUNT_ID",
+  td."ADDED_TIME",
+  td."STATUS_UPDATED_AT"
 FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
-WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" = {int(partner_code)}
-ORDER BY td."ADDED_TIME" DESC"""
+WHERE td."STATUS" = 'IDLE'
+  AND td."LCO_ACCOUNT_ID" = {int(partner_code)}
+ORDER BY td."STATUS_UPDATED_AT" DESC NULLS LAST, td."ADDED_TIME" DESC"""
     return metabase_query(metabase_url, api_key, sql)
 
 
