@@ -946,8 +946,7 @@ def stage_card_with_delta(stage_label, color, rows):
         '<th style="background:#2E75B6;color:#ffffff">Category</th>'
         '<th style="background:#2E75B6;color:#ffffff;width:90px;text-align:right">Delta</th>'
         '<th style="background:#2E75B6;color:#ffffff;width:120px;text-align:right">D-1 Count</th>'
-        '<th style="background:#2E75B6;color:#ffffff;width:120px;text-align:right">D0 Count</th>'
-        '<th style="background:#2E75B6;color:#ffffff;width:80px;text-align:right">%</th>'
+        '<th style="background:#2E75B6;color:#ffffff;width:170px;text-align:right">D0 Count</th>'
         '</tr>'
     )
     serial = 0
@@ -965,7 +964,15 @@ def stage_card_with_delta(stage_label, color, rows):
         else:
             serial_str = ""
 
-        v_str = f"{value:,}" if isinstance(value, int) else str(value)
+        if isinstance(value, int):
+            v_str = f"{value:,}"
+            if pct_str:
+                v_cell = f'<b>{v_str}</b> <span style="color:#666">({pct_str})</span>'
+            else:
+                v_cell = f'<b>{v_str}</b>'
+        else:
+            # value is already HTML (e.g. multi-line S1 cell) — pct_str also HTML
+            v_cell = str(value)
         if isinstance(dm1, int):
             dm1_str = f"{dm1:,}"
         elif isinstance(dm1, str) and dm1:
@@ -992,8 +999,7 @@ def stage_card_with_delta(stage_label, color, rows):
             f'<td style="background:#ffffff;color:#000000">{label}</td>'
             f'<td style="background:#ffffff;color:#000000;text-align:right">{delta_cell}</td>'
             f'<td style="background:#ffffff;color:#000000;text-align:right">{dm1_str}</td>'
-            f'<td style="background:#ffffff;color:#000000;text-align:right;font-weight:bold">{v_str}</td>'
-            f'<td style="background:#ffffff;color:#000000;text-align:right">{pct_str or ""}</td>'
+            f'<td style="background:#ffffff;color:#000000;text-align:right">{v_cell}</td>'
             f'</tr>'
         )
     html += "</table>"
@@ -1051,17 +1057,13 @@ def render_tab5_funnel_with_delta(m, y):
         f'<span style="color:#666">&nbsp;&nbsp;&nbsp;&nbsp;&bull;&nbsp;B2</span></div>'
     )
     s1_cnt_html = (
-        f'<div style="{lh}"><b>{m["s1_csps"]:,}</b><br>'
-        f'<span style="color:#666">{m["s1_voluntary"]:,}</span><br>'
-        f'<span style="color:#666">{m["s1_b1"]:,}</span><br>'
-        f'<span style="color:#666">{m["s1_b2"]:,}</span></div>'
+        f'<div style="{lh}">'
+        f'<b>{m["s1_csps"]:,}</b> <span style="color:#666">(100.0%)</span><br>'
+        f'<span style="color:#666">{m["s1_voluntary"]:,} ({fmt_pct(m["s1_voluntary"], m["s1_csps"])})</span><br>'
+        f'<span style="color:#666">{m["s1_b1"]:,} ({fmt_pct(m["s1_b1"], m["s1_csps"])})</span><br>'
+        f'<span style="color:#666">{m["s1_b2"]:,} ({fmt_pct(m["s1_b2"], m["s1_csps"])})</span></div>'
     )
-    s1_pct_html = (
-        f'<div style="{lh}"><b>100.0%</b><br>'
-        f'<span style="color:#666">{fmt_pct(m["s1_voluntary"], m["s1_csps"])}</span><br>'
-        f'<span style="color:#666">{fmt_pct(m["s1_b1"], m["s1_csps"])}</span><br>'
-        f'<span style="color:#666">{fmt_pct(m["s1_b2"], m["s1_csps"])}</span></div>'
-    )
+    s1_pct_html = ""  # % is now baked into s1_cnt_html
     s1_dm1_html = (
         f'<div style="{lh}"><b>{_line_dm1(yd_csps)}</b><br>'
         f'<span style="color:#666">{_line_dm1(yd_vol)}</span><br>'
