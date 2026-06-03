@@ -1210,7 +1210,7 @@ def render_tab5_funnel_with_delta(m, y):
         f"Please find the exit CSPs report as of today — {today_str}.",
         "",
         "📌 Legend",
-        "  D0 = today's value | D-1 = yesterday's value (at midnight IST) | Delta = D0 − D-1",
+        "  D0 = today's value | D-1 = yesterday's value | Delta = D0 − D-1",
         "",
         f"A total of {m['s1_csps']:,} CSPs{_delta_inline('s1_csps')} with a user base of {m['s1_userbase']:,}{_delta_inline('s1_userbase')} have entered the exit process.",
         f"Blocking has been completed for {m['s3_csps']:,} CSPs, covering a user base of {m['s3_userbase']:,}.",
