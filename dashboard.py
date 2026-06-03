@@ -930,48 +930,70 @@ def _delta_str(d0, dm1):
 
 
 def stage_card_with_delta(stage_label, color, rows):
-    """6-column stage card: S.No / Category / D0 Count / % / D-1 Count / Delta.
-    Each row: (label, today_value, today_pct_str, d_minus_1_value_or_None)."""
+    """6-column stage card matching Tab 2 stage_card() styling.
+    Columns: S.No / Category / D0 Count / % / D-1 Count / Delta.
+    Each row is a 4-tuple (label, value, pct, dm1) — value/dm1/label may be
+    int or HTML string (HTML strings render as-is to support multi-line cells
+    like Tab 2's S1 CSP+breakdown row). Optionally a 5th element overrides
+    the Delta cell HTML (used when value/dm1 are multi-line)."""
     html = (
         f'<div style="background:{color};color:#ffffff;padding:10px 14px;'
         f'font-weight:bold;font-size:14px;margin-top:14px;border-radius:6px 6px 0 0">'
         f'{stage_label}</div>'
         '<table class="csp-table">'
         '<tr>'
-        '<th style="background:#2E75B6;color:#ffffff;width:50px">S.No</th>'
+        '<th style="background:#2E75B6;color:#ffffff;width:60px">S.No</th>'
         '<th style="background:#2E75B6;color:#ffffff">Category</th>'
-        '<th style="background:#2E75B6;color:#ffffff;width:90px;text-align:right">D0 Count</th>'
-        '<th style="background:#2E75B6;color:#ffffff;width:70px;text-align:right">%</th>'
-        '<th style="background:#2E75B6;color:#ffffff;width:90px;text-align:right">D-1 Count</th>'
-        '<th style="background:#2E75B6;color:#ffffff;width:80px;text-align:right">Delta</th>'
+        '<th style="background:#2E75B6;color:#ffffff;width:90px;text-align:right">Delta</th>'
+        '<th style="background:#2E75B6;color:#ffffff;width:120px;text-align:right">D-1 Count</th>'
+        '<th style="background:#2E75B6;color:#ffffff;width:120px;text-align:right">D0 Count</th>'
+        '<th style="background:#2E75B6;color:#ffffff;width:80px;text-align:right">%</th>'
         '</tr>'
     )
     serial = 0
-    for label, value, pct_str, dm1 in rows:
+    for item in rows:
+        if len(item) == 5:
+            label, value, pct_str, dm1, delta_html = item
+        else:
+            label, value, pct_str, dm1 = item
+            delta_html = None
+
         is_sub = isinstance(label, str) and label.startswith(" ")
         if not is_sub:
             serial += 1
             serial_str = str(serial)
         else:
             serial_str = ""
+
         v_str = f"{value:,}" if isinstance(value, int) else str(value)
-        dm1_str = f"{dm1:,}" if isinstance(dm1, int) else "—"
-        delta = _delta_str(value if isinstance(value, int) else None, dm1 if isinstance(dm1, int) else None)
-        # Color delta: green for +, red for −, grey for 0/—
-        if delta.startswith("+"):
-            delta_color = "#107C10"
-        elif delta.startswith("-"):
-            delta_color = "#C42B1C"
+        if isinstance(dm1, int):
+            dm1_str = f"{dm1:,}"
+        elif isinstance(dm1, str) and dm1:
+            dm1_str = dm1
         else:
-            delta_color = "#666666"
+            dm1_str = "—"
+
+        if delta_html is not None:
+            delta_cell = delta_html
+        else:
+            delta = _delta_str(value if isinstance(value, int) else None,
+                               dm1 if isinstance(dm1, int) else None)
+            if delta.startswith("+"):
+                dc = "#107C10"
+            elif delta.startswith("-"):
+                dc = "#C42B1C"
+            else:
+                dc = "#666666"
+            delta_cell = f'<span style="color:{dc};font-weight:bold">{delta}</span>'
+
         html += (
             f'<tr>'
             f'<td style="background:#ffffff;color:#000000;text-align:center">{serial_str}</td>'
             f'<td style="background:#ffffff;color:#000000">{label}</td>'
+            f'<td style="background:#ffffff;color:#000000;text-align:right">{delta_cell}</td>'
+            f'<td style="background:#ffffff;color:#000000;text-align:right">{dm1_str}</td>'
             f'<td style="background:#ffffff;color:#000000;text-align:right;font-weight:bold">{v_str}</td>'
             f'<td style="background:#ffffff;color:#000000;text-align:right">{pct_str or ""}</td>'
-            f'<td style="background:#ffffff;color:#000000;text-align:right">{dm1_str}</td>'
-            f'<td style="background:#ffffff;color:{delta_color};text-align:right;font-weight:bold">{delta}</td>'
             f'</tr>'
         )
     html += "</table>"
@@ -997,14 +1019,66 @@ def render_tab5_funnel_with_delta(m, y):
     def yd(k):
         return y.get(k) if has_y else None
 
-    # ── S1 ───────────────────────────────────────────────────────────────────
+    # ── S1 — CSP + Voluntary/B1/B2 stacked in ONE row (matches Tab 2 styling)
+    lh = "line-height:1.9"
+
+    def _line_delta(d0, dm1, bold=False):
+        """Inline delta span for one multi-line entry. Returns '' if dm1 missing."""
+        if dm1 is None:
+            return "—"
+        ds = _delta_str(d0, dm1)
+        if ds.startswith("+"):
+            dc = "#107C10"
+        elif ds.startswith("-"):
+            dc = "#C42B1C"
+        else:
+            dc = "#666666"
+        weight = ";font-weight:bold" if bold else ""
+        return f'<span style="color:{dc}{weight}">{ds}</span>'
+
+    def _line_dm1(dm1):
+        return f"{dm1:,}" if isinstance(dm1, int) else "—"
+
+    yd_csps = yd("s1_csps")
+    yd_vol = yd("s1_voluntary")
+    yd_b1 = yd("s1_b1")
+    yd_b2 = yd("s1_b2")
+
+    s1_cat_html = (
+        f'<div style="{lh}"><b>CSP</b><br>'
+        f'<span style="color:#666">&nbsp;&nbsp;&nbsp;&nbsp;&bull;&nbsp;Voluntary</span><br>'
+        f'<span style="color:#666">&nbsp;&nbsp;&nbsp;&nbsp;&bull;&nbsp;B1</span><br>'
+        f'<span style="color:#666">&nbsp;&nbsp;&nbsp;&nbsp;&bull;&nbsp;B2</span></div>'
+    )
+    s1_cnt_html = (
+        f'<div style="{lh}"><b>{m["s1_csps"]:,}</b><br>'
+        f'<span style="color:#666">{m["s1_voluntary"]:,}</span><br>'
+        f'<span style="color:#666">{m["s1_b1"]:,}</span><br>'
+        f'<span style="color:#666">{m["s1_b2"]:,}</span></div>'
+    )
+    s1_pct_html = (
+        f'<div style="{lh}"><b>100.0%</b><br>'
+        f'<span style="color:#666">{fmt_pct(m["s1_voluntary"], m["s1_csps"])}</span><br>'
+        f'<span style="color:#666">{fmt_pct(m["s1_b1"], m["s1_csps"])}</span><br>'
+        f'<span style="color:#666">{fmt_pct(m["s1_b2"], m["s1_csps"])}</span></div>'
+    )
+    s1_dm1_html = (
+        f'<div style="{lh}"><b>{_line_dm1(yd_csps)}</b><br>'
+        f'<span style="color:#666">{_line_dm1(yd_vol)}</span><br>'
+        f'<span style="color:#666">{_line_dm1(yd_b1)}</span><br>'
+        f'<span style="color:#666">{_line_dm1(yd_b2)}</span></div>'
+    )
+    s1_delta_html = (
+        f'<div style="{lh}">{_line_delta(m["s1_csps"], yd_csps, bold=True)}<br>'
+        f'{_line_delta(m["s1_voluntary"], yd_vol)}<br>'
+        f'{_line_delta(m["s1_b1"], yd_b1)}<br>'
+        f'{_line_delta(m["s1_b2"], yd_b2)}</div>'
+    )
+
     st.markdown(stage_card_with_delta(
         "STAGE 1  —  EXIT DECLARED (total in exit pipeline)", STAGE_COLORS["S1"],
         [
-            ("CSP", m['s1_csps'], "100.0%", yd("s1_csps")),
-            ("  ↳ Voluntary", m['s1_voluntary'], fmt_pct(m['s1_voluntary'], m['s1_csps']), yd("s1_voluntary")),
-            ("  ↳ B1", m['s1_b1'], fmt_pct(m['s1_b1'], m['s1_csps']), yd("s1_b1")),
-            ("  ↳ B2", m['s1_b2'], fmt_pct(m['s1_b2'], m['s1_csps']), yd("s1_b2")),
+            (s1_cat_html, s1_cnt_html, s1_pct_html, s1_dm1_html, s1_delta_html),
             ("Userbase", m['s1_userbase'], "100.0%", yd("s1_userbase")),
         ]
     ), unsafe_allow_html=True)
