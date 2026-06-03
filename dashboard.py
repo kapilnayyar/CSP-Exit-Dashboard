@@ -810,6 +810,9 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
     s4a_u1_mig = sum(u1_by.get(p["name"].lower(), {}).get("migrated", 0) for p in completed)
     s4a_u2_total = sum(u2_total.get(p["name"].lower(), 0) for p in completed)
     s4a_u2_pick = sum(u2_picked.get(p["name"].lower(), 0) for p in completed)
+    # Userbase for completed partners — uses sheet (U1+U2) where available,
+    # falls back to R15 active for partners not yet in the sheet.
+    s4a_userbase = sum(ub_of(p) for p in completed)
 
     # S4b — currently in S4
     s4b_csps = len(s4_partners)
@@ -823,6 +826,7 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
         s4b_u2_pick += u2_picked.get(key, 0)
         if u1d["total"] == 0 and u2_total.get(key, 0) == 0:
             s4b_pending += r15_of(p)
+    s4b_userbase = s4b_u1 + s4b_u2 + s4b_pending
 
     # S5 reconciliation — same formulas as render_tab2_funnel
     s5_u1_total = s5_u1_mig = s5_u2_total = s5_u2_picked = 0
@@ -851,10 +855,10 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
         "s1_voluntary": s1_voluntary, "s1_b1": s1_b1, "s1_b2": s1_b2,
         "s2_csps": s2_csps, "s2_userbase": s2_userbase,
         "s3_csps": s3_csps, "s3_userbase": s3_userbase,
-        "s4a_csps": s4a_csps,
+        "s4a_csps": s4a_csps, "s4a_userbase": s4a_userbase,
         "s4a_u1_total": s4a_u1_total, "s4a_u1_mig": s4a_u1_mig,
         "s4a_u2_total": s4a_u2_total, "s4a_u2_pick": s4a_u2_pick,
-        "s4b_csps": s4b_csps,
+        "s4b_csps": s4b_csps, "s4b_userbase": s4b_userbase,
         "s4b_u1": s4b_u1, "s4b_u1_mig": s4b_u1_mig,
         "s4b_u2": s4b_u2, "s4b_u2_pick": s4b_u2_pick,
         "s4b_pending": s4b_pending,
@@ -1190,8 +1194,8 @@ def render_tab5_funnel_with_delta(m, y):
         d = m.get(key, 0) - dm1
         return f"- {label}: Δ {d:+,d}"
 
-    s4a_userbase = m['s4a_u1_total'] + m['s4a_u2_total']
-    s4b_userbase = m['s4b_u1'] + m['s4b_u2'] + m['s4b_pending']
+    s4a_userbase = m.get('s4a_userbase', m['s4a_u1_total'] + m['s4a_u2_total'])
+    s4b_userbase = m.get('s4b_userbase', m['s4b_u1'] + m['s4b_u2'] + m['s4b_pending'])
     u1_conv = fmt_pct(m['s4a_u1_mig'], m['s4a_u1_total']) or "0.0%"
     u2_conv = fmt_pct(m['s4a_u2_pick'], m['s4a_u2_total']) or "0.0%"
     s6_liability_text = (
