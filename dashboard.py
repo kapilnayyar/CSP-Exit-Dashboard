@@ -1172,6 +1172,71 @@ def render_tab5_funnel_with_delta(m, y):
         ]
     ), unsafe_allow_html=True)
 
+    # ── Daily report (copy-paste from below) ─────────────────────────────────
+    def _delta_inline(key):
+        """Returns ' (Δ +N since yesterday)' or '' when no D-1."""
+        dm1 = y.get(key) if has_y else None
+        if not isinstance(dm1, int):
+            return ""
+        d = m.get(key, 0) - dm1
+        if d == 0:
+            return " (no change)"
+        return f" (Δ {d:+,d} since yesterday)"
+
+    def _delta_bullet(key, label):
+        dm1 = y.get(key) if has_y else None
+        if not isinstance(dm1, int):
+            return f"- {label}: — (no D-1 data)"
+        d = m.get(key, 0) - dm1
+        return f"- {label}: Δ {d:+,d}"
+
+    s4a_userbase = m['s4a_u1_total'] + m['s4a_u2_total']
+    s4b_userbase = m['s4b_u1'] + m['s4b_u2'] + m['s4b_pending']
+    u1_conv = fmt_pct(m['s4a_u1_mig'], m['s4a_u1_total']) or "0.0%"
+    u2_conv = fmt_pct(m['s4a_u2_pick'], m['s4a_u2_total']) or "0.0%"
+    s6_liability_text = (
+        "zero pending Netbox liability"
+        if m['s6_idle'] == 0
+        else f"{m['s6_idle']:,} pending Netbox"
+    )
+    csp_word = "CSP" if m['s6_csps'] == 1 else "CSPs"
+
+    report_lines = [
+        "@channel",
+        f"Please find the exit CSPs report as of today — {today_str}.",
+        "",
+        "📌 Legend",
+        "  D0 = today's value | D-1 = yesterday's value (at midnight IST) | Delta = D0 − D-1",
+        "",
+        f"A total of {m['s1_csps']:,} CSPs{_delta_inline('s1_csps')} with a user base of {m['s1_userbase']:,}{_delta_inline('s1_userbase')} have entered the exit process.",
+        f"Blocking has been completed for {m['s3_csps']:,} CSPs, covering a user base of {m['s3_userbase']:,}.",
+        f"The S4 stage has been completed for {m['s4a_csps']:,} CSPs{_delta_inline('s4a_csps')} with a user base of {s4a_userbase:,}, while {m['s4b_csps']:,} CSPs with a user base of {s4b_userbase:,} are currently in the S4 stage.",
+        f"{m['s5_csps']:,} CSPs{_delta_inline('s5_csps')} have progressed to S5, with a total Netbox liability of {m['s5_liability']:,}{_delta_inline('s5_liability')}.",
+        f"Migration of {m['s4a_u1_mig']:,} U1 customers{_delta_inline('s4a_u1_mig')} with {u1_conv} conversion and {m['s4a_u2_pick']:,} U2 customers{_delta_inline('s4a_u2_pick')} Device picked up with {u2_conv} conversion for {m['s4a_csps']:,} CSPs.",
+        f"{m['s6_csps']:,} {csp_word} has successfully reached S6 with {s6_liability_text}.",
+        "",
+        "🔍 What changed since yesterday:",
+        _delta_bullet('s1_csps', 'CSPs in exit'),
+        _delta_bullet('s1_userbase', 'Userbase in exit'),
+        _delta_bullet('s4a_csps', 'S4 completed (CSPs)'),
+        _delta_bullet('s5_csps', 'S5 CSPs'),
+        _delta_bullet('s5_liability', 'Total Netbox liability'),
+        _delta_bullet('s4a_u1_mig', 'U1 migrations'),
+        _delta_bullet('s4a_u2_pick', 'U2 device pickups'),
+        _delta_bullet('s5_collected', 'Netbox collected from CSP'),
+        _delta_bullet('s6_csps', 'S6 (complete) CSPs'),
+        "",
+        "ℹ Note on Userbase deltas:",
+        "A Userbase delta of ±1 (or ±2) is normal. For CSPs that don't yet have explicit",
+        "rows in the sheet, the userbase count is computed via the R15 rule — customers",
+        "active in the last 15 days — which naturally fluctuates by a customer or two as",
+        "people migrate, churn, or come back online. It does not mean a real loss.",
+    ]
+    report = "\n".join(report_lines)
+
+    st.markdown("### 📋 Daily Report (copy from below)")
+    st.code(report, language=None)
+
 
 
 def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup, idle_total_s6=0, netbox_collected_by_code=None):
