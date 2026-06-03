@@ -703,7 +703,7 @@ def build_sheet_lookups(u1_rows, u2_rows):
 STAGE_COLORS = {
     "S1": "#1F4E78",
     "S2": "#2E75B6",
-    "S3": "#ED7D31",
+    "S3": "#B7950B",
     "S4a": "#548235",
     "S4b": "#BF9000",
     "S4c": "#375623",
@@ -929,13 +929,15 @@ def _delta_str(d0, dm1):
     return "0"
 
 
-def stage_card_with_delta(stage_label, color, rows):
+def stage_card_with_delta(stage_label, color, rows, delta_color_override=None):
     """6-column stage card matching Tab 2 stage_card() styling.
     Columns: S.No / Category / D0 Count / % / D-1 Count / Delta.
     Each row is a 4-tuple (label, value, pct, dm1) — value/dm1/label may be
     int or HTML string (HTML strings render as-is to support multi-line cells
     like Tab 2's S1 CSP+breakdown row). Optionally a 5th element overrides
-    the Delta cell HTML (used when value/dm1 are multi-line)."""
+    the Delta cell HTML (used when value/dm1 are multi-line).
+    delta_color_override: if set (e.g. "#E67E22"), every auto-computed Delta
+    cell uses this color regardless of sign (used for S3 — all-orange deltas)."""
     html = (
         f'<div style="background:{color};color:#ffffff;padding:10px 14px;'
         f'font-weight:bold;font-size:14px;margin-top:14px;border-radius:6px 6px 0 0">'
@@ -988,7 +990,9 @@ def stage_card_with_delta(stage_label, color, rows):
         else:
             delta = _delta_str(value if isinstance(value, int) else None,
                                dm1 if isinstance(dm1, int) else None)
-            if delta.startswith("+"):
+            if delta_color_override:
+                dc = delta_color_override
+            elif delta.startswith("+"):
                 dc = "#107C10"
             elif delta.startswith("-"):
                 dc = "#C42B1C"
@@ -1117,7 +1121,8 @@ def render_tab5_funnel_with_delta(m, y):
         [
             ("CSPs", m['s3_csps'], fmt_pct(m['s3_csps'], m['s1_csps']), yd("s3_csps")),
             ("Userbase", m['s3_userbase'], fmt_pct(m['s3_userbase'], m['s1_userbase']), yd("s3_userbase")),
-        ]
+        ],
+        delta_color_override="#ED7D31",
     ), unsafe_allow_html=True)
 
     # ── S4a ──────────────────────────────────────────────────────────────────
