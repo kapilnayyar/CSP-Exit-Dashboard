@@ -105,11 +105,16 @@ def get_secrets():
 
 U2_TAB = "Main sheet"
 U1_TAB = "Migration Data"
-SNAPSHOT_TAB = "Daily Snapshots"
-SNAPSHOT_HEADERS = [
-    "snapshot_date", "partner_code", "partner_name", "current_state",
-    "u1_total", "u1_migrated", "u2_total", "u2_picked",
-    "netbox_idle", "netbox_collected",
+TOTALS_TAB = "Daily Totals"
+TOTALS_HEADERS = [
+    "date",
+    "s1_csps", "s1_userbase", "s1_voluntary", "s1_b1", "s1_b2",
+    "s2_csps", "s2_userbase",
+    "s3_csps", "s3_userbase",
+    "s4a_csps", "s4a_u1_total", "s4a_u1_mig", "s4a_u2_total", "s4a_u2_pick",
+    "s4b_csps", "s4b_u1", "s4b_u1_mig", "s4b_u2", "s4b_u2_pick", "s4b_pending",
+    "s5_csps", "s5_idle", "s5_could_not_pick", "s5_liability", "s5_collected",
+    "s6_csps", "s6_idle", "s6_collected",
 ]
 
 
@@ -751,68 +756,150 @@ def fmt_pct(n, denom):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DAILY SNAPSHOT + DELTA + REPORT
+# DAILY TOTALS + DELTA (Tab 5 support)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _get_or_create_snapshot_tab(book):
-    """Return the snapshot worksheet, creating it (with header row) if missing."""
+def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
+                          idle_total, s5_dedup, netbox_collected_by_code,
+                          idle_total_s6):
+    """Aggregate today's funnel metrics into the flat dict written to Daily Totals.
+
+    Self-contained: computes S5 reconciliation (could_not_pick, liability,
+    devices collected) and S6 collected internally — same formulas as Tab 2.
+    """
+    netbox_collected_by_code = netbox_collected_by_code or {}
+    by_state = defaultdict(list)
+    for p in partners:
+        by_state[p["current_state"]].append(p)
+
+    def r15_of(p):
+        return r15_by_code.get(str(p.get("partner_code") or ""), 0)
+
+    def sheet_ub(p):
+        key = p["name"].lower()
+        return (u1_by.get(key, {}).get("total", 0) or 0) + (u2_total.get(key, 0) or 0)
+
+    def ub_of(p):
+        s = sheet_ub(p)
+        return s if s > 0 else r15_of(p)
+
+    in_pipeline = [p for p in partners if p.get("current_state") in ("S1","S2","S3","S4","S5","S6")]
+    current_s2 = by_state.get("S2", [])
+    past_s3 = [p for p in in_pipeline if p["current_state"] in ("S3","S4","S5","S6")]
+    s4_partners = by_state.get("S4", [])
+    s5_partners = by_state.get("S5", [])
+    s6_partners = by_state.get("S6", [])
+    completed = s5_partners + s6_partners
+
+    # S1 sums (with exit_type breakdown)
+    s1_csps = len(in_pipeline)
+    s1_userbase = sum(ub_of(p) for p in in_pipeline)
+    s1_voluntary = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "Voluntary")
+    s1_b1 = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "B1")
+    s1_b2 = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "B2")
+
+    # S2/S3
+    s2_csps = len(current_s2)
+    s2_userbase = sum(ub_of(p) for p in current_s2)
+    s3_csps = len(past_s3)
+    s3_userbase = sum(ub_of(p) for p in past_s3)
+
+    # S4a — completed (in S5 or S6)
+    s4a_csps = len(completed)
+    s4a_u1_total = sum(u1_by.get(p["name"].lower(), {}).get("total", 0) for p in completed)
+    s4a_u1_mig = sum(u1_by.get(p["name"].lower(), {}).get("migrated", 0) for p in completed)
+    s4a_u2_total = sum(u2_total.get(p["name"].lower(), 0) for p in completed)
+    s4a_u2_pick = sum(u2_picked.get(p["name"].lower(), 0) for p in completed)
+
+    # S4b — currently in S4
+    s4b_csps = len(s4_partners)
+    s4b_u1 = s4b_u1_mig = s4b_u2 = s4b_u2_pick = s4b_pending = 0
+    for p in s4_partners:
+        key = p["name"].lower()
+        u1d = u1_by.get(key, {"total": 0, "migrated": 0})
+        s4b_u1 += u1d["total"]
+        s4b_u1_mig += u1d["migrated"]
+        s4b_u2 += u2_total.get(key, 0)
+        s4b_u2_pick += u2_picked.get(key, 0)
+        if u1d["total"] == 0 and u2_total.get(key, 0) == 0:
+            s4b_pending += r15_of(p)
+
+    # S5 reconciliation — same formulas as render_tab2_funnel
+    s5_u1_total = s5_u1_mig = s5_u2_total = s5_u2_picked = 0
+    for p in s5_partners:
+        key = p["name"].lower()
+        u1d = u1_by.get(key, {"total": 0, "migrated": 0})
+        s5_u1_total += u1d["total"]; s5_u1_mig += u1d["migrated"]
+        s5_u2_total += u2_total.get(key, 0); s5_u2_picked += u2_picked.get(key, 0)
+    s5_could_not_pick_raw = (s5_u1_total - s5_u1_mig) + (s5_u2_total - s5_u2_picked)
+    dup = s5_dedup.get("duplicates", 0) if s5_dedup else 0
+    s5_could_not_pick = max(s5_could_not_pick_raw - dup, 0)
+    s5_liability = idle_total + s5_could_not_pick
+    s5_devices_collected = sum(
+        netbox_collected_by_code.get(str(p.get("partner_code") or ""), 0)
+        for p in s5_partners
+    )
+
+    # S6 — netbox collected
+    s6_collected = sum(
+        netbox_collected_by_code.get(str(p.get("partner_code") or ""), 0)
+        for p in s6_partners
+    )
+
+    return {
+        "s1_csps": s1_csps, "s1_userbase": s1_userbase,
+        "s1_voluntary": s1_voluntary, "s1_b1": s1_b1, "s1_b2": s1_b2,
+        "s2_csps": s2_csps, "s2_userbase": s2_userbase,
+        "s3_csps": s3_csps, "s3_userbase": s3_userbase,
+        "s4a_csps": s4a_csps,
+        "s4a_u1_total": s4a_u1_total, "s4a_u1_mig": s4a_u1_mig,
+        "s4a_u2_total": s4a_u2_total, "s4a_u2_pick": s4a_u2_pick,
+        "s4b_csps": s4b_csps,
+        "s4b_u1": s4b_u1, "s4b_u1_mig": s4b_u1_mig,
+        "s4b_u2": s4b_u2, "s4b_u2_pick": s4b_u2_pick,
+        "s4b_pending": s4b_pending,
+        "s5_csps": len(s5_partners), "s5_idle": idle_total,
+        "s5_could_not_pick": s5_could_not_pick, "s5_liability": s5_liability,
+        "s5_collected": s5_devices_collected,
+        "s6_csps": len(s6_partners), "s6_idle": idle_total_s6, "s6_collected": s6_collected,
+    }
+
+
+def _get_or_create_totals_tab(book):
+    """Return the Daily Totals worksheet, creating it (with header row) if missing."""
     try:
-        return book.worksheet(SNAPSHOT_TAB)
+        return book.worksheet(TOTALS_TAB)
     except gspread.WorksheetNotFound:
-        ws = book.add_worksheet(title=SNAPSHOT_TAB, rows=20000, cols=len(SNAPSHOT_HEADERS))
-        ws.append_row(SNAPSHOT_HEADERS)
+        ws = book.add_worksheet(title=TOTALS_TAB, rows=2000, cols=len(TOTALS_HEADERS))
+        ws.append_row(TOTALS_HEADERS)
         return ws
 
 
-def capture_snapshot_if_needed(book, partners, u1_by, u2_total, u2_picked,
-                               netbox_collected_by_code, idle_by_code, force=False):
-    """Append today's per-partner snapshot rows to the 'Daily Snapshots' tab.
-    Idempotent: skips if today's date already has any row, unless force=True."""
+def write_today_totals(book, totals):
+    """Idempotently append today's totals row to Daily Totals tab."""
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
     try:
-        ws = _get_or_create_snapshot_tab(book)
-    except Exception as e:
-        return False, f"Failed to access snapshot tab: {e}"
-
-    if not force:
-        try:
-            existing_dates = set(ws.col_values(1)[1:])
-        except Exception:
-            existing_dates = set()
-        if today_str in existing_dates:
-            return False, "Today's snapshot already captured"
-
-    rows = []
-    for p in partners:
-        name = p.get("name", "") or ""
-        key = name.lower()
-        u1d = u1_by.get(key, {"total": 0, "migrated": 0})
-        code = str(p.get("partner_code") or "")
-        rows.append([
-            today_str,
-            code,
-            name,
-            p.get("current_state", "") or "",
-            int(u1d.get("total", 0) or 0),
-            int(u1d.get("migrated", 0) or 0),
-            int(u2_total.get(key, 0) or 0),
-            int(u2_picked.get(key, 0) or 0),
-            int(idle_by_code.get(code, 0) or 0),
-            int(netbox_collected_by_code.get(code, 0) or 0),
-        ])
-    if not rows:
-        return False, "No partners to snapshot"
+        ws = _get_or_create_totals_tab(book)
+    except Exception:
+        return False
     try:
-        ws.append_rows(rows, value_input_option="USER_ENTERED")
-    except Exception as e:
-        return False, f"Failed to append snapshot rows: {e}"
-    return True, f"Captured snapshot for {today_str}: {len(rows)} CSPs"
-
-
-def fetch_yesterday_snapshot(book):
-    """Return {partner_code: row_dict} for yesterday's snapshot rows."""
+        existing_dates = set(ws.col_values(1)[1:])
+    except Exception:
+        existing_dates = set()
+    if today_str in existing_dates:
+        return False
+    row = [today_str] + [int(totals.get(k, 0) or 0) for k in TOTALS_HEADERS[1:]]
     try:
-        ws = book.worksheet(SNAPSHOT_TAB)
+        ws.append_row(row, value_input_option="USER_ENTERED")
+    except Exception:
+        return False
+    return True
+
+
+def read_yesterday_totals(book):
+    """Return {column → int} for yesterday's row in Daily Totals; {} if missing."""
+    try:
+        ws = book.worksheet(TOTALS_TAB)
     except Exception:
         return {}
     try:
@@ -820,226 +907,180 @@ def fetch_yesterday_snapshot(book):
     except Exception:
         return {}
     yesterday = (datetime.now(IST) - timedelta(days=1)).strftime("%Y-%m-%d")
-    out = {}
     for r in rows:
-        if str(r.get("snapshot_date") or "").strip() == yesterday:
-            code = str(r.get("partner_code") or "").strip()
-            if code:
-                out[code] = r
-    return out
+        if str(r.get("date") or "").strip() == yesterday:
+            out = {}
+            for k in TOTALS_HEADERS[1:]:
+                try:
+                    out[k] = int(float(r.get(k) or 0))
+                except (TypeError, ValueError):
+                    out[k] = 0
+            return out
+    return {}
 
 
-def compute_deltas(partners, yest_map, u1_by, u2_total, u2_picked, idle_by_code):
-    """Compute today-vs-yesterday transitions and progress."""
-    movers_s4_to_s5 = []
-    movers_s5_to_s6 = []
-    delta_u1_mig_existing = 0
-    delta_u2_pick_existing = 0
-
-    def _ti(v):
-        try: return int(float(v or 0))
-        except (TypeError, ValueError): return 0
-
-    for p in partners:
-        code = str(p.get("partner_code") or "")
-        name = p.get("name", "") or ""
-        key = name.lower()
-        curr_state = p.get("current_state", "") or ""
-        y = yest_map.get(code)
-        if not y:
-            continue
-        y_state = str(y.get("current_state") or "").strip()
-        if y_state == "S4" and curr_state == "S5":
-            movers_s4_to_s5.append(p)
-        elif y_state == "S5" and curr_state == "S6":
-            movers_s5_to_s6.append(p)
-        if y_state == curr_state and curr_state in ("S5", "S6"):
-            curr_u1_mig = u1_by.get(key, {}).get("migrated", 0)
-            curr_u2_pick = u2_picked.get(key, 0)
-            delta_u1_mig_existing += max(curr_u1_mig - _ti(y.get("u1_migrated")), 0)
-            delta_u2_pick_existing += max(curr_u2_pick - _ti(y.get("u2_picked")), 0)
-
-    # Movers' aggregated metrics (for the "Additionally..." sentence)
-    movers_u1_mig = sum(u1_by.get(p["name"].lower(), {}).get("migrated", 0) for p in movers_s4_to_s5)
-    movers_u2_pick = sum(u2_picked.get(p["name"].lower(), 0) for p in movers_s4_to_s5)
-    movers_liability = 0
-    for p in movers_s4_to_s5:
-        code = str(p.get("partner_code") or "")
-        key = p["name"].lower()
-        u1d = u1_by.get(key, {"total": 0, "migrated": 0})
-        u1_pend = max(u1d["total"] - u1d["migrated"], 0)
-        u2_pend = max(u2_total.get(key, 0) - u2_picked.get(key, 0), 0)
-        movers_liability += idle_by_code.get(code, 0) + u1_pend + u2_pend
-
-    return {
-        "has_yesterday": bool(yest_map),
-        "movers_s4_to_s5": movers_s4_to_s5,
-        "movers_s5_to_s6": movers_s5_to_s6,
-        "movers_u1_mig": movers_u1_mig,
-        "movers_u2_pick": movers_u2_pick,
-        "movers_liability": movers_liability,
-        "delta_u1_mig_existing": delta_u1_mig_existing,
-        "delta_u2_pick_existing": delta_u2_pick_existing,
-    }
+def _delta_str(d0, dm1):
+    """Format the Delta column. Show '—' if D-1 is missing/None."""
+    if dm1 is None:
+        return "—"
+    d = (d0 or 0) - (dm1 or 0)
+    if d > 0: return f"+{d:,}"
+    if d < 0: return f"{d:,}"
+    return "0"
 
 
-def _report_section_label(label, color):
-    """Small visual separator label between report sub-sections (S1-3, S4, S5-6, Deltas)."""
-    return (
-        f'<div style="background:{color};color:#ffffff;padding:8px 14px;'
-        f'font-weight:bold;font-size:13px;margin-top:24px;border-radius:6px;'
-        f'letter-spacing:1px">{label}</div>'
+def stage_card_with_delta(stage_label, color, rows):
+    """7-column stage card: S.No / Category / Count / % / D0 / D-1 / Delta.
+    Each row: (label, today_value, today_pct_str, d_minus_1_value_or_None)."""
+    html = (
+        f'<div style="background:{color};color:#ffffff;padding:10px 14px;'
+        f'font-weight:bold;font-size:14px;margin-top:14px;border-radius:6px 6px 0 0">'
+        f'{stage_label}</div>'
+        '<table class="csp-table">'
+        '<tr>'
+        '<th style="background:#2E75B6;color:#ffffff;width:50px">S.No</th>'
+        '<th style="background:#2E75B6;color:#ffffff">Category</th>'
+        '<th style="background:#2E75B6;color:#ffffff;width:80px;text-align:right">Count</th>'
+        '<th style="background:#2E75B6;color:#ffffff;width:70px;text-align:right">%</th>'
+        '<th style="background:#2E75B6;color:#ffffff;width:80px;text-align:right">D0</th>'
+        '<th style="background:#2E75B6;color:#ffffff;width:80px;text-align:right">D-1</th>'
+        '<th style="background:#2E75B6;color:#ffffff;width:80px;text-align:right">Delta</th>'
+        '</tr>'
     )
-
-
-def render_daily_report(m, deltas):
-    """Render the daily report (HTML 3-block + plain text with copy button) at the bottom of Tab 2."""
-    today_str = datetime.now(IST).strftime("%d-%b-%Y")
-
-    # ── Plain text version (for Slack copy-paste) ────────────────────────────
-    lines = ["Please find the exit CSPs report as of today", ""]
-    lines.append(
-        f"A total of {m['s1_csps']:,} CSPs with a user base of {m['s1_userbase']:,} have entered the exit process."
-    )
-    lines.append(
-        f"Blocking has been completed for {m['s3_csps']:,} CSPs, "
-        f"covering a user base of {m['s3_userbase']:,}."
-    )
-    lines.append(
-        f"The S4 stage has been completed for {m['s4a_csps']:,} CSPs with a user base of {m['s4a_userbase']:,}, "
-        f"while {m['s4b_csps']:,} CSPs with a user base of {m['s4b_userbase']:,} are currently in the S4 stage."
-    )
-    lines.append(
-        f"{m['s5_csps']:,} CSPs have progressed to S5, with a total Netbox liability of {m['s5_liability']:,}."
-    )
-    u1_conv = fmt_pct(m['s4a_u1_mig'], m['s4a_u1_total']) or "0.0%"
-    u2_conv = fmt_pct(m['s4a_u2_pick'], m['s4a_u2_total']) or "0.0%"
-    lines.append(
-        f"Migration of {m['s4a_u1_mig']:,} U1 customers with {u1_conv} of conversion "
-        f"and {m['s4a_u2_pick']:,} U2 customers Device picked up with {u2_conv} of conversion "
-        f"for {m['s4a_csps']:,} CSPs."
-    )
-    if deltas['has_yesterday'] and deltas['movers_s4_to_s5']:
-        mc = len(deltas['movers_s4_to_s5'])
-        u1_word = "migration" if deltas['movers_u1_mig'] == 1 else "migrations"
-        u2_word = "device pickup" if deltas['movers_u2_pick'] == 1 else "device pickups"
-        lines.append(
-            f"Additionally, for the {mc} CSPs that recently progressed from S4 to S5, "
-            f"{deltas['movers_u1_mig']:,} U1 {u1_word} and "
-            f"{deltas['movers_u2_pick']:,} U2 {u2_word} have been completed. "
-            f"The total device liability for these CSPs is {deltas['movers_liability']:,}."
+    serial = 0
+    for label, value, pct_str, dm1 in rows:
+        is_sub = isinstance(label, str) and label.startswith(" ")
+        if not is_sub:
+            serial += 1
+            serial_str = str(serial)
+        else:
+            serial_str = ""
+        v_str = f"{value:,}" if isinstance(value, int) else str(value)
+        dm1_str = f"{dm1:,}" if isinstance(dm1, int) else "—"
+        delta = _delta_str(value if isinstance(value, int) else None, dm1 if isinstance(dm1, int) else None)
+        # Color delta: green for +, red for −, grey for 0/—
+        if delta.startswith("+"):
+            delta_color = "#107C10"
+        elif delta.startswith("-"):
+            delta_color = "#C42B1C"
+        else:
+            delta_color = "#666666"
+        html += (
+            f'<tr>'
+            f'<td style="background:#ffffff;color:#000000;text-align:center">{serial_str}</td>'
+            f'<td style="background:#ffffff;color:#000000">{label}</td>'
+            f'<td style="background:#ffffff;color:#000000;text-align:right;font-weight:bold">{v_str}</td>'
+            f'<td style="background:#ffffff;color:#000000;text-align:right">{pct_str or ""}</td>'
+            f'<td style="background:#ffffff;color:#000000;text-align:right">{v_str}</td>'
+            f'<td style="background:#ffffff;color:#000000;text-align:right">{dm1_str}</td>'
+            f'<td style="background:#ffffff;color:{delta_color};text-align:right;font-weight:bold">{delta}</td>'
+            f'</tr>'
         )
-    s6_n = m['s6_csps']; s6_pending = m.get('s6_idle', 0)
-    if s6_n > 0:
-        verb = "has" if s6_n == 1 else "have"
-        noun = "CSP" if s6_n == 1 else "CSPs"
-        tail = "zero pending Netbox liability" if s6_pending == 0 else f"{s6_pending:,} pending Netbox liability"
-        lines.append(f"{s6_n} {noun} {verb} successfully reached S6 with {tail}.")
-    text_report = "\n".join(lines)
+    html += "</table>"
+    return html
 
-    # ── HTML version — uses the same stage_card() styling as the funnel above
+
+def render_tab5_funnel_with_delta(m, y):
+    """Tab 5 — same 7 stages as Tab 2, with D0 / D-1 / Delta columns.
+    m = today_metrics dict; y = yesterday_totals dict (empty if missing)."""
+
+    today_str = datetime.now(IST).strftime("%d-%b-%Y")
+    has_y = bool(y)
+
     st.markdown(
         f'<div style="background:#1F4E78;color:#ffffff;padding:14px;border-radius:8px;'
-        f'font-size:17px;font-weight:bold;text-align:center;margin-top:24px;margin-bottom:6px">'
-        f'📋 DAILY EXIT REPORT — {today_str}</div>',
+        f'font-size:17px;font-weight:bold;text-align:center;margin-top:6px;margin-bottom:6px">'
+        f'CSP EXIT FUNNEL — DAILY DELTA — {today_str}</div>',
         unsafe_allow_html=True,
     )
+    if not has_y:
+        st.info("ℹ No data for yesterday yet in **Daily Totals** tab. Seed yesterday's row manually to enable D-1 and Delta columns. Today's row is auto-captured.")
 
-    # ─ Section header: Stages 1-3 ─
-    st.markdown(_report_section_label("SECTION A · STAGES 1–3 (Declaration → Blocking)", "#1F4E78"), unsafe_allow_html=True)
+    def yd(k):
+        return y.get(k) if has_y else None
 
-    # S1
-    st.markdown(stage_card("STAGE 1  —  EXIT DECLARED (total in exit pipeline)", STAGE_COLORS["S1"], [
-        ("CSP", m['s1_csps'], "100.0%"),
-        ("  • Voluntary", m['s1_voluntary'], fmt_pct(m['s1_voluntary'], m['s1_csps'])),
-        ("  • B1", m['s1_b1'], fmt_pct(m['s1_b1'], m['s1_csps'])),
-        ("  • B2", m['s1_b2'], fmt_pct(m['s1_b2'], m['s1_csps'])),
-        ("Userbase", m['s1_userbase'], "100.0%"),
-    ]), unsafe_allow_html=True)
+    # ── S1 ───────────────────────────────────────────────────────────────────
+    st.markdown(stage_card_with_delta(
+        "STAGE 1  —  EXIT DECLARED (total in exit pipeline)", STAGE_COLORS["S1"],
+        [
+            ("CSP", m['s1_csps'], "100.0%", yd("s1_csps")),
+            ("  ↳ Voluntary", m['s1_voluntary'], fmt_pct(m['s1_voluntary'], m['s1_csps']), yd("s1_voluntary")),
+            ("  ↳ B1", m['s1_b1'], fmt_pct(m['s1_b1'], m['s1_csps']), yd("s1_b1")),
+            ("  ↳ B2", m['s1_b2'], fmt_pct(m['s1_b2'], m['s1_csps']), yd("s1_b2")),
+            ("Userbase", m['s1_userbase'], "100.0%", yd("s1_userbase")),
+        ]
+    ), unsafe_allow_html=True)
 
-    # S2
-    st.markdown(stage_card("STAGE 2  —  NOTICE PERIOD (currently serving)", STAGE_COLORS["S2"], [
-        ("CSPs", m['s2_csps'], fmt_pct(m['s2_csps'], m['s1_csps'])),
-        ("Userbase", m['s2_userbase'], fmt_pct(m['s2_userbase'], m['s1_userbase'])),
-    ]), unsafe_allow_html=True)
+    # ── S2 ───────────────────────────────────────────────────────────────────
+    st.markdown(stage_card_with_delta(
+        "STAGE 2  —  NOTICE PERIOD (currently serving)", STAGE_COLORS["S2"],
+        [
+            ("CSPs", m['s2_csps'], fmt_pct(m['s2_csps'], m['s1_csps']), yd("s2_csps")),
+            ("Userbase", m['s2_userbase'], fmt_pct(m['s2_userbase'], m['s1_userbase']), yd("s2_userbase")),
+        ]
+    ), unsafe_allow_html=True)
 
-    # S3
-    st.markdown(stage_card("STAGE 3  —  BLOCKING", STAGE_COLORS["S3"], [
-        ("CSPs", m['s3_csps'], fmt_pct(m['s3_csps'], m['s1_csps'])),
-        ("Userbase", m['s3_userbase'], fmt_pct(m['s3_userbase'], m['s1_userbase'])),
-    ]), unsafe_allow_html=True)
+    # ── S3 ───────────────────────────────────────────────────────────────────
+    st.markdown(stage_card_with_delta(
+        "STAGE 3  —  BLOCKING", STAGE_COLORS["S3"],
+        [
+            ("CSPs", m['s3_csps'], fmt_pct(m['s3_csps'], m['s1_csps']), yd("s3_csps")),
+            ("Userbase", m['s3_userbase'], fmt_pct(m['s3_userbase'], m['s1_userbase']), yd("s3_userbase")),
+        ]
+    ), unsafe_allow_html=True)
 
-    # ─ Section header: Stage 4 ─
-    st.markdown(_report_section_label("SECTION B · STAGE 4 (Execution)", "#548235"), unsafe_allow_html=True)
+    # ── S4a ──────────────────────────────────────────────────────────────────
+    u1_conv = fmt_pct(m['s4a_u1_mig'], m['s4a_u1_total'])
+    u2_conv = fmt_pct(m['s4a_u2_pick'], m['s4a_u2_total'])
+    st.markdown(stage_card_with_delta(
+        "STAGE 4a  —  EXECUTION COMPLETED (currently in S5 or S6)", STAGE_COLORS["S4c"],
+        [
+            ("CSPs", m['s4a_csps'], fmt_pct(m['s4a_csps'], m['s1_csps']), yd("s4a_csps")),
+            ("U1 Migration Completed", m['s4a_u1_mig'], u1_conv, yd("s4a_u1_mig")),
+            ("U2 Netbox Picked by Wiom", m['s4a_u2_pick'], u2_conv, yd("s4a_u2_pick")),
+        ]
+    ), unsafe_allow_html=True)
 
-    # S4a
-    st.markdown(stage_card("STAGE 4a  —  EXECUTION COMPLETED (currently in S5 or S6)", STAGE_COLORS["S4c"], [
-        ("CSPs", m['s4a_csps'], fmt_pct(m['s4a_csps'], m['s1_csps'])),
-        ("U1 Migration Completed", m['s4a_u1_mig'], u1_conv),
-        ("U2 Netbox Picked by Wiom", m['s4a_u2_pick'], u2_conv),
-    ]), unsafe_allow_html=True)
+    # ── S4b ──────────────────────────────────────────────────────────────────
+    s4b_total = m['s4b_u1'] + m['s4b_u2'] + m['s4b_pending']
+    st.markdown(stage_card_with_delta(
+        "STAGE 4b  —  EXECUTION IN PROCESS (currently in S4)", STAGE_COLORS["S4a"],
+        [
+            ("CSPs", m['s4b_csps'], fmt_pct(m['s4b_csps'], m['s1_csps']), yd("s4b_csps")),
+            ("U1 Userbase", m['s4b_u1'], fmt_pct(m['s4b_u1'], s4b_total), yd("s4b_u1")),
+            ("Migration Done", m['s4b_u1_mig'], fmt_pct(m['s4b_u1_mig'], m['s4b_u1']), yd("s4b_u1_mig")),
+            ("U2 Userbase", m['s4b_u2'], fmt_pct(m['s4b_u2'], s4b_total), yd("s4b_u2")),
+            ("Netbox Pickup Done", m['s4b_u2_pick'], fmt_pct(m['s4b_u2_pick'], m['s4b_u2']), yd("s4b_u2_pick")),
+            ("Userbase Pending to Add", m['s4b_pending'], fmt_pct(m['s4b_pending'], s4b_total), yd("s4b_pending")),
+        ]
+    ), unsafe_allow_html=True)
 
-    # S4b
-    s4b_total_ub = m['s4b_u1'] + m['s4b_u2'] + m['s4b_pending']
-    st.markdown(stage_card("STAGE 4b  —  EXECUTION IN PROCESS (currently in S4)", STAGE_COLORS["S4a"], [
-        ("CSPs", m['s4b_csps'], fmt_pct(m['s4b_csps'], m['s1_csps'])),
-        ("U1 Userbase", m['s4b_u1'], fmt_pct(m['s4b_u1'], s4b_total_ub)),
-        ("Migration Done", m['s4b_u1_mig'], fmt_pct(m['s4b_u1_mig'], m['s4b_u1'])),
-        ("U2 Userbase", m['s4b_u2'], fmt_pct(m['s4b_u2'], s4b_total_ub)),
-        ("Netbox Pickup Done", m['s4b_u2_pick'], fmt_pct(m['s4b_u2_pick'], m['s4b_u2'])),
-        ("Userbase Pending to Add", m['s4b_pending'], fmt_pct(m['s4b_pending'], s4b_total_ub)),
-    ]), unsafe_allow_html=True)
+    # ── S5 ───────────────────────────────────────────────────────────────────
+    st.markdown(stage_card_with_delta(
+        "STAGE 5  —  RECONCILIATION (FNF process)", STAGE_COLORS["S5"],
+        [
+            ("CSPs", m['s5_csps'], fmt_pct(m['s5_csps'], m['s1_csps']), yd("s5_csps")),
+            ("Netbox at CSPs", m['s5_idle'], fmt_pct(m['s5_idle'], m['s5_liability']), yd("s5_idle")),
+            ("Could not pick (deduped)", m['s5_could_not_pick'], fmt_pct(m['s5_could_not_pick'], m['s5_liability']), yd("s5_could_not_pick")),
+            ("Total Netbox Liability", m['s5_liability'], "100.0%", yd("s5_liability")),
+            ("Total Netbox Collected from CSP", m['s5_collected'], fmt_pct(m['s5_collected'], m['s5_liability']), yd("s5_collected")),
+        ]
+    ), unsafe_allow_html=True)
 
-    # ─ Section header: Stage 5-6 + Deltas ─
-    st.markdown(_report_section_label("SECTION C · STAGES 5–6 + TODAY'S DELTAS", "#9C0006"), unsafe_allow_html=True)
-
-    # S5
-    st.markdown(stage_card("STAGE 5  —  RECONCILIATION (FNF process)", STAGE_COLORS["S5"], [
-        ("CSPs", m['s5_csps'], fmt_pct(m['s5_csps'], m['s1_csps'])),
-        ("Netbox at CSPs", m['s5_idle'], fmt_pct(m['s5_idle'], m['s5_liability'])),
-        ("Could not pick (deduped)", m['s5_could_not_pick'], fmt_pct(m['s5_could_not_pick'], m['s5_liability'])),
-        ("Total Netbox Liability", m['s5_liability'], "100.0%"),
-        ("Total Netbox Collected from CSP", m.get('s5_collected', 0), fmt_pct(m.get('s5_collected', 0), m['s5_liability'])),
-    ]), unsafe_allow_html=True)
-
-    # S6
-    s6_idle = m.get('s6_idle', 0)
-    s6_collected = m.get('s6_collected', 0)
-    s6_total = s6_idle + s6_collected
-    st.markdown(stage_card("STAGE 6  —  COMPLETE", STAGE_COLORS["S6"], [
-        ("CSPs", m['s6_csps'], fmt_pct(m['s6_csps'], m['s1_csps'])),
-        ("Netbox at CSP", s6_idle, fmt_pct(s6_idle, s6_total) if s6_total else "0.0%"),
-        ("Total Netbox Collected from CSP", s6_collected, fmt_pct(s6_collected, s6_total) if s6_total else "0.0%"),
-    ]), unsafe_allow_html=True)
-
-    # Today's Deltas
-    if deltas['has_yesterday']:
-        delta_rows = []
-        if deltas['movers_s4_to_s5']:
-            n = len(deltas['movers_s4_to_s5'])
-            delta_rows.append(("CSPs moved S4 → S5", n, fmt_pct(n, m['s1_csps'])))
-            delta_rows.append(("  • U1 migrations completed in those", deltas['movers_u1_mig'], ""))
-            delta_rows.append(("  • U2 pickups completed in those", deltas['movers_u2_pick'], ""))
-            delta_rows.append(("  • Total device liability of those CSPs", deltas['movers_liability'], ""))
-        if deltas['movers_s5_to_s6']:
-            n = len(deltas['movers_s5_to_s6'])
-            delta_rows.append(("CSPs moved S5 → S6", n, fmt_pct(n, m['s1_csps'])))
-        delta_rows.append(("Δ U1 migrations done (existing S5/S6)", deltas['delta_u1_mig_existing'], ""))
-        delta_rows.append(("Δ U2 pickups done (existing S5/S6)", deltas['delta_u2_pick_existing'], ""))
-        any_change = (deltas['movers_s4_to_s5'] or deltas['movers_s5_to_s6']
-                      or deltas['delta_u1_mig_existing'] or deltas['delta_u2_pick_existing'])
-        if not any_change:
-            delta_rows = [("No state changes or progress since yesterday", 0, "—")]
-    else:
-        delta_rows = [("Δ vs yesterday", 0, "Will be available tomorrow")]
-
-    st.markdown(stage_card("📊  TODAY'S DELTAS — vs yesterday's snapshot", "#404040", delta_rows), unsafe_allow_html=True)
-
-    st.markdown("**📝 Text version (copy & paste into Slack):**")
-    st.code(text_report, language=None)
+    # ── S6 ───────────────────────────────────────────────────────────────────
+    s6_total_dev = m['s6_idle'] + m['s6_collected']
+    st.markdown(stage_card_with_delta(
+        "STAGE 6  —  COMPLETE", STAGE_COLORS["S6"],
+        [
+            ("CSPs", m['s6_csps'], fmt_pct(m['s6_csps'], m['s1_csps']), yd("s6_csps")),
+            ("Netbox at CSP", m['s6_idle'], fmt_pct(m['s6_idle'], s6_total_dev) if s6_total_dev else "0.0%", yd("s6_idle")),
+            ("Total Netbox Collected from CSP", m['s6_collected'], fmt_pct(m['s6_collected'], s6_total_dev) if s6_total_dev else "0.0%", yd("s6_collected")),
+        ]
+    ), unsafe_allow_html=True)
 
 
-def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup, idle_total_s6=0, netbox_collected_by_code=None, deltas=None, book=None, idle_by_code=None):
+
+def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup, idle_total_s6=0, netbox_collected_by_code=None):
     """Tab 2 — funnel. S1/S2/S3 are cumulative; S4a/S4b/S5/S6 are current snapshots.
     % computed against S1 totals."""
     by_state = defaultdict(list)
@@ -1199,48 +1240,6 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
             ("Netbox at CSP", idle_total_s6, s6_at_pct),
             ("Total Netbox Collected from CSP", s6_collected, s6_col_pct),
         ]), unsafe_allow_html=True)
-    else:
-        s6_collected = 0
-
-    # ── DAILY EXIT REPORT (HTML + text) ──────────────────────────────────────
-    metrics = {
-        "s1_csps": s1_csps, "s1_userbase": s1_userbase,
-        "s1_voluntary": s1_voluntary, "s1_b1": s1_b1, "s1_b2": s1_b2,
-        "s2_csps": s2_csps, "s2_userbase": s2_userbase,
-        "s3_csps": s3_csps, "s3_userbase": s3_userbase,
-        "s4a_csps": s4a_csps_completed,
-        "s4a_u1_total": s4a_u1_total, "s4a_u1_mig": s4a_u1_mig,
-        "s4a_u2_total": s4a_u2_total, "s4a_u2_pick": s4a_u2_pick,
-        "s4a_userbase": s4a_u1_total + s4a_u2_total,
-        "s4b_csps": s4b_csps,
-        "s4b_u1": s4b_u1, "s4b_u1_mig": s4b_u1_mig,
-        "s4b_u2": s4b_u2, "s4b_u2_pick": s4b_u2_pick,
-        "s4b_pending": s4b_pending,
-        "s4b_userbase": s4b_u1 + s4b_u2,
-        "s5_csps": len(s5_partners), "s5_idle": idle_total,
-        "s5_could_not_pick": s5_could_not_pick, "s5_liability": s5_liability,
-        "s5_collected": s5_devices_collected,
-        "s6_csps": s6_csps, "s6_idle": idle_total_s6, "s6_collected": s6_collected,
-    }
-    deltas_to_show = deltas or {
-        "has_yesterday": False,
-        "movers_s4_to_s5": [], "movers_s5_to_s6": [],
-        "movers_u1_mig": 0, "movers_u2_pick": 0, "movers_liability": 0,
-        "delta_u1_mig_existing": 0, "delta_u2_pick_existing": 0,
-    }
-    render_daily_report(metrics, deltas_to_show)
-
-    # Manual snapshot capture button (force=True overrides idempotency check)
-    if book is not None and idle_by_code is not None:
-        if st.button("📸 Capture today's snapshot now", key="manual_snapshot"):
-            ok, msg = capture_snapshot_if_needed(
-                book, partners, u1_by, u2_total, u2_picked,
-                netbox_collected_by_code or {}, idle_by_code, force=True,
-            )
-            if ok:
-                st.success(msg)
-            else:
-                st.warning(msg)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1463,10 +1462,12 @@ def render():
         unsafe_allow_html=True,
     )
 
-    # ── Snapshot capture + delta computation (powers the daily report) ───────
-    # Open a writable gspread workbook for snapshot writes
-    book = None
-    yest_map = {}
+    # ── Daily Totals capture + D-1 read (powers Tab 5) ────────────────────────
+    today_metrics = compute_today_metrics(
+        partners, u1_by, u2_total, u2_picked, r15_by_code,
+        idle_total, s5_dedup, netbox_collected_by_code, idle_total_s6,
+    )
+    yest_totals = {}
     try:
         _creds = Credentials.from_service_account_info(
             secrets["gcp_creds"],
@@ -1474,18 +1475,14 @@ def render():
                     "https://www.googleapis.com/auth/drive.readonly"],
         )
         book = gspread.authorize(_creds).open_by_key(secrets["sheet_id"])
-        # Auto-capture today's snapshot (idempotent)
-        capture_snapshot_if_needed(
-            book, partners, u1_by, u2_total, u2_picked,
-            netbox_collected_by_code, idle_by_code,
-        )
-        yest_map = fetch_yesterday_snapshot(book)
+        write_today_totals(book, today_metrics)
+        yest_totals = read_yesterday_totals(book)
     except Exception:
         pass
-    deltas = compute_deltas(partners, yest_map, u1_by, u2_total, u2_picked, idle_by_code)
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Status & Cohorts", "CSP Exit Funnel", "Data Quality", "Search",
+        "Daily Funnel + Delta",
     ])
     with tab1:
         render_tab1_status(u1, u2)
@@ -1493,12 +1490,13 @@ def render():
         render_tab2_funnel(
             partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total,
             s5_dedup, idle_total_s6, netbox_collected_by_code,
-            deltas=deltas, book=book, idle_by_code=idle_by_code,
         )
     with tab3:
         render_tab3_data_quality(partners, u1_by, u2_total, r15_by)
     with tab4:
         render_tab4_search(partners, u2_rows, secrets)
+    with tab5:
+        render_tab5_funnel_with_delta(today_metrics, yest_totals)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

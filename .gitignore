@@ -2,6 +2,7 @@
 google_credentials.json
 .streamlit/secrets.toml
 streamlit_secrets_to_paste.toml
+streamlit_secrets_complete.toml
 __pycache__/
 *.pyc
 .venv/
