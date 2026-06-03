@@ -930,7 +930,7 @@ def _delta_str(d0, dm1):
 
 
 def stage_card_with_delta(stage_label, color, rows):
-    """7-column stage card: S.No / Category / Count / % / D0 / D-1 / Delta.
+    """6-column stage card: S.No / Category / D0 Count / % / D-1 Count / Delta.
     Each row: (label, today_value, today_pct_str, d_minus_1_value_or_None)."""
     html = (
         f'<div style="background:{color};color:#ffffff;padding:10px 14px;'
@@ -940,10 +940,9 @@ def stage_card_with_delta(stage_label, color, rows):
         '<tr>'
         '<th style="background:#2E75B6;color:#ffffff;width:50px">S.No</th>'
         '<th style="background:#2E75B6;color:#ffffff">Category</th>'
-        '<th style="background:#2E75B6;color:#ffffff;width:80px;text-align:right">Count</th>'
+        '<th style="background:#2E75B6;color:#ffffff;width:90px;text-align:right">D0 Count</th>'
         '<th style="background:#2E75B6;color:#ffffff;width:70px;text-align:right">%</th>'
-        '<th style="background:#2E75B6;color:#ffffff;width:80px;text-align:right">D0</th>'
-        '<th style="background:#2E75B6;color:#ffffff;width:80px;text-align:right">D-1</th>'
+        '<th style="background:#2E75B6;color:#ffffff;width:90px;text-align:right">D-1 Count</th>'
         '<th style="background:#2E75B6;color:#ffffff;width:80px;text-align:right">Delta</th>'
         '</tr>'
     )
@@ -971,7 +970,6 @@ def stage_card_with_delta(stage_label, color, rows):
             f'<td style="background:#ffffff;color:#000000">{label}</td>'
             f'<td style="background:#ffffff;color:#000000;text-align:right;font-weight:bold">{v_str}</td>'
             f'<td style="background:#ffffff;color:#000000;text-align:right">{pct_str or ""}</td>'
-            f'<td style="background:#ffffff;color:#000000;text-align:right">{v_str}</td>'
             f'<td style="background:#ffffff;color:#000000;text-align:right">{dm1_str}</td>'
             f'<td style="background:#ffffff;color:{delta_color};text-align:right;font-weight:bold">{delta}</td>'
             f'</tr>'
