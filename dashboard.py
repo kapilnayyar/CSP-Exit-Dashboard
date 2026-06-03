@@ -1202,8 +1202,7 @@ def render_tab5_funnel_with_delta(m, y):
         "@channel",
         f"Please find the exit CSPs report as of today — {today_str}.",
         "",
-        "📌 Legend",
-        "  D0 = today's value | D-1 = yesterday's value | Delta = D0 − D-1",
+        "D0 means today's number, D-1 means yesterday's number, Delta shows what changed.",
         "",
         f"• A total of {m['s1_csps']:,} CSPs{_delta_inline('s1_csps')} with a user base of {m['s1_userbase']:,}{_delta_inline('s1_userbase')} have entered the exit process.",
         f"• Blocking has been completed for {m['s3_csps']:,} CSPs, covering a user base of {m['s3_userbase']:,}.",
@@ -1213,11 +1212,7 @@ def render_tab5_funnel_with_delta(m, y):
         f"• S4 in process: Migration Done for {m['s4b_u1_mig']:,} U1 customers{_delta_inline('s4b_u1_mig')} and Netbox Pickup Done for {m['s4b_u2_pick']:,} U2 customers{_delta_inline('s4b_u2_pick')} across {m['s4b_csps']:,} CSPs.",
         f"• {m['s6_csps']:,} {csp_word} has successfully reached S6 with {s6_liability_text}.",
         "",
-        "ℹ Note on Userbase deltas:",
-        "A Userbase delta of ±1 (or ±2) is normal. For CSPs that don't yet have explicit",
-        "rows in the sheet, the userbase count is computed via the R15 rule — customers",
-        "active in the last 15 days — which naturally fluctuates by a customer or two as",
-        "people migrate, churn, or come back online. It does not mean a real loss.",
+        "Note: Userbase may differ by ±1 because some CSPs use the R15 rule (customers active in last 15 days), which varies a little each day.",
     ]
     report = "\n".join(report_lines)
 
