@@ -1212,7 +1212,7 @@ def render_tab5_funnel_with_delta(m, y):
         f"• S4 in process: Migration Done for {m['s4b_u1_mig']:,} U1 customers{_delta_inline('s4b_u1_mig')} and Netbox Pickup Done for {m['s4b_u2_pick']:,} U2 customers{_delta_inline('s4b_u2_pick')} across {m['s4b_csps']:,} CSPs.",
         f"• {m['s6_csps']:,} {csp_word} has successfully reached S6 with {s6_liability_text}.",
         "",
-        "Note: Userbase may differ by ±1 because some CSPs use the R15 rule (customers active in last 15 days), which varies a little each day.",
+        "Note: Userbase may differ by ±1 because for some CSPs whose execution is in process, their data is currently not added in the sheet, so as per the R15 rule their daily userbase can fluctuate.",
     ]
     report = "\n".join(report_lines)
 
