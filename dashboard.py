@@ -5,7 +5,7 @@ Live web view of the CSP exit funnel, sourced from the Google Sheet your team
 updates daily. Mirrors the 5-table format of CSP_Exit_Tracker.xlsx exactly.
 
 Auth: email + APP_PASSWORD (only @wiom.in emails can log in).
-Data: pulled from Google Sheets every 30 seconds via service account.
+Data: pulled from Google Sheets every 5 minutes via service account.
 """
 
 import streamlit as st
@@ -118,7 +118,7 @@ TOTALS_HEADERS = [
 ]
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300)
 def fetch_sheets(sheet_id, gcp_creds):
     """Pull the two relevant tabs by name and return rows as list-of-dicts."""
     creds = Credentials.from_service_account_info(
@@ -139,7 +139,7 @@ def fetch_sheets(sheet_id, gcp_creds):
     return u2_rows, u1_rows
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300)
 def fetch_netbox_collection(sheet_id, gcp_creds):
     """Pull 'S5 Netbox Collection' tab — {partner_code: devices_collected}."""
     creds = Credentials.from_service_account_info(
@@ -172,7 +172,7 @@ def fetch_netbox_collection(sheet_id, gcp_creds):
 # SUPABASE — partner-exit-tracker state (read-only via anon key)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300)
 def fetch_partners(supabase_url, supabase_key):
     """Pull all partners with state, partner_code, u1/u2 counts. SELECT-only."""
     if not supabase_url or not supabase_key:
@@ -201,7 +201,7 @@ def fetch_partners(supabase_url, supabase_key):
     return partners
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300)
 def fetch_u1_customers(supabase_url, supabase_key):
     """Pull U1 customer-level records — used for dedup against Metabase IDLE devices."""
     if not supabase_url or not supabase_key:
@@ -929,15 +929,16 @@ def _delta_str(d0, dm1):
     return "0"
 
 
-def stage_card_with_delta(stage_label, color, rows, delta_color_override=None):
+def stage_card_with_delta(stage_label, color, rows):
     """6-column stage card matching Tab 2 stage_card() styling.
     Columns: S.No / Category / D0 Count / % / D-1 Count / Delta.
     Each row is a 4-tuple (label, value, pct, dm1) — value/dm1/label may be
     int or HTML string (HTML strings render as-is to support multi-line cells
     like Tab 2's S1 CSP+breakdown row). Optionally a 5th element overrides
     the Delta cell HTML (used when value/dm1 are multi-line).
-    delta_color_override: if set (e.g. "#E67E22"), every auto-computed Delta
-    cell uses this color regardless of sign (used for S3 — all-orange deltas)."""
+
+    Every Delta cell has an orange background; the inner text color is still
+    green/red/grey by sign so +/-/0 stays readable."""
     html = (
         f'<div style="background:{color};color:#ffffff;padding:10px 14px;'
         f'font-weight:bold;font-size:14px;margin-top:14px;border-radius:6px 6px 0 0">'
@@ -990,21 +991,19 @@ def stage_card_with_delta(stage_label, color, rows, delta_color_override=None):
         else:
             delta = _delta_str(value if isinstance(value, int) else None,
                                dm1 if isinstance(dm1, int) else None)
-            if delta_color_override:
-                dc = delta_color_override
-            elif delta.startswith("+"):
+            if delta.startswith("+"):
                 dc = "#107C10"
             elif delta.startswith("-"):
                 dc = "#C42B1C"
             else:
-                dc = "#666666"
+                dc = "#333333"
             delta_cell = f'<span style="color:{dc};font-weight:bold">{delta}</span>'
 
         html += (
             f'<tr>'
             f'<td style="background:#ffffff;color:#000000;text-align:center">{serial_str}</td>'
             f'<td style="background:#ffffff;color:#000000">{label}</td>'
-            f'<td style="background:#ffffff;color:#000000;text-align:right">{delta_cell}</td>'
+            f'<td style="background:#FFD8A8;color:#000000;text-align:right">{delta_cell}</td>'
             f'<td style="background:#ffffff;color:#000000;text-align:right">{dm1_str}</td>'
             f'<td style="background:#ffffff;color:#000000;text-align:right">{v_cell}</td>'
             f'</tr>'
@@ -1121,8 +1120,7 @@ def render_tab5_funnel_with_delta(m, y):
         [
             ("CSPs", m['s3_csps'], fmt_pct(m['s3_csps'], m['s1_csps']), yd("s3_csps")),
             ("Userbase", m['s3_userbase'], fmt_pct(m['s3_userbase'], m['s1_userbase']), yd("s3_userbase")),
-        ],
-        delta_color_override="#ED7D31",
+        ]
     ), unsafe_allow_html=True)
 
     # ── S4a ──────────────────────────────────────────────────────────────────
@@ -1554,7 +1552,7 @@ def render():
         unsafe_allow_html=True,
     )
     st.markdown(
-        '<div class="updated">Live — auto-refreshes every 30 seconds</div>',
+        '<div class="updated">Live — auto-refreshes every 5 minutes</div>',
         unsafe_allow_html=True,
     )
 
@@ -1732,6 +1730,6 @@ with col_logout:
         st.rerun()
 
 # Auto-refresh every 30 seconds
-st_autorefresh(interval=30000)
+st_autorefresh(interval=300000)  # 5 minutes
 
 render()
