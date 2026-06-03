@@ -1621,8 +1621,8 @@ footer {visibility: hidden !important;}
     margin-bottom: 6px;
 }
 .csp-table th {
-    background: #2E75B6 !important;
-    color: #ffffff !important;
+    background: #2E75B6;
+    color: #ffffff;
     padding: 8px 12px;
     border: 1px solid #999;
     text-align: left;
