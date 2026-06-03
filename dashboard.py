@@ -1187,13 +1187,6 @@ def render_tab5_funnel_with_delta(m, y):
             return " (no change)"
         return f" (Δ {d:+,d} since yesterday)"
 
-    def _delta_bullet(key, label):
-        dm1 = y.get(key) if has_y else None
-        if not isinstance(dm1, int):
-            return f"- {label}: — (no D-1 data)"
-        d = m.get(key, 0) - dm1
-        return f"- {label}: Δ {d:+,d}"
-
     s4a_userbase = m.get('s4a_userbase', m['s4a_u1_total'] + m['s4a_u2_total'])
     s4b_userbase = m.get('s4b_userbase', m['s4b_u1'] + m['s4b_u2'] + m['s4b_pending'])
     u1_conv = fmt_pct(m['s4a_u1_mig'], m['s4a_u1_total']) or "0.0%"
@@ -1219,19 +1212,6 @@ def render_tab5_funnel_with_delta(m, y):
         f"S4 completed: Migration of {m['s4a_u1_mig']:,} U1 customers{_delta_inline('s4a_u1_mig')} with {u1_conv} conversion and {m['s4a_u2_pick']:,} U2 customers{_delta_inline('s4a_u2_pick')} Device picked up with {u2_conv} conversion for {m['s4a_csps']:,} CSPs.",
         f"S4 in process: Migration Done for {m['s4b_u1_mig']:,} U1 customers{_delta_inline('s4b_u1_mig')} and Netbox Pickup Done for {m['s4b_u2_pick']:,} U2 customers{_delta_inline('s4b_u2_pick')} across {m['s4b_csps']:,} CSPs.",
         f"{m['s6_csps']:,} {csp_word} has successfully reached S6 with {s6_liability_text}.",
-        "",
-        "🔍 What changed since yesterday:",
-        _delta_bullet('s1_csps', 'CSPs in exit'),
-        _delta_bullet('s1_userbase', 'Userbase in exit'),
-        _delta_bullet('s4a_csps', 'S4 completed (CSPs)'),
-        _delta_bullet('s5_csps', 'S5 CSPs'),
-        _delta_bullet('s5_liability', 'Total Netbox liability'),
-        _delta_bullet('s4a_u1_mig', 'U1 migrations (S4 completed)'),
-        _delta_bullet('s4a_u2_pick', 'U2 device pickups (S4 completed)'),
-        _delta_bullet('s4b_u1_mig', 'U1 migrations (S4 in process)'),
-        _delta_bullet('s4b_u2_pick', 'U2 device pickups (S4 in process)'),
-        _delta_bullet('s5_collected', 'Netbox collected from CSP'),
-        _delta_bullet('s6_csps', 'S6 (complete) CSPs'),
         "",
         "ℹ Note on Userbase deltas:",
         "A Userbase delta of ±1 (or ±2) is normal. For CSPs that don't yet have explicit",
