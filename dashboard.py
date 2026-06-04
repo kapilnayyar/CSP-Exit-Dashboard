@@ -35,9 +35,7 @@ EXCLUDED_PARTNER_CODES = {
     281749854653857,
     281749854733209,
     274877909399,
-    274877951823,
     281749854674788,
-    281749854632442,
 }
 
 # Sheet partner name -> canonical Supabase partner name (lowercased keys).
