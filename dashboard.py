@@ -45,6 +45,46 @@ SHEET_NAME_ALIAS = {
     "khan enterprises": "MANISHA TRADERS 1",
 }
 
+# Partner-code-based attribution override for name collisions in the sheet.
+# When two Supabase partners share the same name, sum-by-name in the sheet
+# double-counts. Each entry here pins the per-partner sheet values; the
+# name-based lookup is bypassed for these specific partner_codes.
+# Add a new entry whenever a new collision is identified.
+ATTRIBUTION_OVERRIDE = {
+    # S4 (B2) Shree Shyam Broadband — new, declared 2026-06-04. Owns the 7 U1
+    # row (Total U1=7, Migrated=blank) + all 78 U2 rows added today.
+    "274877952814":    {"u1_total": 7, "u1_migrated": 0,
+                        "u2_total": 78, "u2_picked": 0},
+    # S5 (Voluntary) Shree Shyam Broadband — older, exit 2026-04-07. Owns only
+    # the 2-U1 row (Total U1=2, Migrated=0, Reason="Plan Expired"). No U2.
+    "281749855023736": {"u1_total": 2, "u1_migrated": 0,
+                        "u2_total": 0, "u2_picked": 0},
+}
+
+
+def _u1_for(p, u1_by):
+    code = str(p.get("partner_code") or "")
+    if code in ATTRIBUTION_OVERRIDE:
+        ov = ATTRIBUTION_OVERRIDE[code]
+        return {"total": ov["u1_total"], "migrated": ov["u1_migrated"]}
+    key = p["name"].lower()
+    return u1_by.get(key, {"total": 0, "migrated": 0})
+
+
+def _u2_total_for(p, u2_total):
+    code = str(p.get("partner_code") or "")
+    if code in ATTRIBUTION_OVERRIDE:
+        return ATTRIBUTION_OVERRIDE[code]["u2_total"]
+    return u2_total.get(p["name"].lower(), 0)
+
+
+def _u2_picked_for(p, u2_picked):
+    code = str(p.get("partner_code") or "")
+    if code in ATTRIBUTION_OVERRIDE:
+        return ATTRIBUTION_OVERRIDE[code]["u2_picked"]
+    return u2_picked.get(p["name"].lower(), 0)
+
+
 _TOKEN_SALT = "csp-exit-wiom-dashboard-2026"
 
 
@@ -803,10 +843,10 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
 
     # S4a — completed (in S5 or S6)
     s4a_csps = len(completed)
-    s4a_u1_total = sum(u1_by.get(p["name"].lower(), {}).get("total", 0) for p in completed)
-    s4a_u1_mig = sum(u1_by.get(p["name"].lower(), {}).get("migrated", 0) for p in completed)
-    s4a_u2_total = sum(u2_total.get(p["name"].lower(), 0) for p in completed)
-    s4a_u2_pick = sum(u2_picked.get(p["name"].lower(), 0) for p in completed)
+    s4a_u1_total = sum(_u1_for(p, u1_by)["total"] for p in completed)
+    s4a_u1_mig = sum(_u1_for(p, u1_by)["migrated"] for p in completed)
+    s4a_u2_total = sum(_u2_total_for(p, u2_total) for p in completed)
+    s4a_u2_pick = sum(_u2_picked_for(p, u2_picked) for p in completed)
     # Userbase for completed partners — uses sheet (U1+U2) where available,
     # falls back to R15 active for partners not yet in the sheet.
     s4a_userbase = sum(ub_of(p) for p in completed)
@@ -815,23 +855,24 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
     s4b_csps = len(s4_partners)
     s4b_u1 = s4b_u1_mig = s4b_u2 = s4b_u2_pick = s4b_pending = 0
     for p in s4_partners:
-        key = p["name"].lower()
-        u1d = u1_by.get(key, {"total": 0, "migrated": 0})
+        u1d = _u1_for(p, u1_by)
+        u2t = _u2_total_for(p, u2_total)
+        u2p = _u2_picked_for(p, u2_picked)
         s4b_u1 += u1d["total"]
         s4b_u1_mig += u1d["migrated"]
-        s4b_u2 += u2_total.get(key, 0)
-        s4b_u2_pick += u2_picked.get(key, 0)
-        if u1d["total"] == 0 and u2_total.get(key, 0) == 0:
+        s4b_u2 += u2t
+        s4b_u2_pick += u2p
+        if u1d["total"] == 0 and u2t == 0:
             s4b_pending += r15_of(p)
     s4b_userbase = s4b_u1 + s4b_u2 + s4b_pending
 
     # S5 reconciliation — same formulas as render_tab2_funnel
     s5_u1_total = s5_u1_mig = s5_u2_total = s5_u2_picked = 0
     for p in s5_partners:
-        key = p["name"].lower()
-        u1d = u1_by.get(key, {"total": 0, "migrated": 0})
+        u1d = _u1_for(p, u1_by)
         s5_u1_total += u1d["total"]; s5_u1_mig += u1d["migrated"]
-        s5_u2_total += u2_total.get(key, 0); s5_u2_picked += u2_picked.get(key, 0)
+        s5_u2_total += _u2_total_for(p, u2_total)
+        s5_u2_picked += _u2_picked_for(p, u2_picked)
     s5_could_not_pick_raw = (s5_u1_total - s5_u1_mig) + (s5_u2_total - s5_u2_picked)
     dup = s5_dedup.get("duplicates", 0) if s5_dedup else 0
     s5_could_not_pick = max(s5_could_not_pick_raw - dup, 0)
@@ -1303,10 +1344,10 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     # ── S4a — Execution Completed (currently in S5 or S6) ────────────────────
     s5_partners = by_state.get("S5", [])
     completed_partners = s5_partners + by_state.get("S6", [])
-    s4a_u1_total = sum(u1_by.get(p["name"].lower(), {}).get("total", 0) for p in completed_partners)
-    s4a_u1_mig = sum(u1_by.get(p["name"].lower(), {}).get("migrated", 0) for p in completed_partners)
-    s4a_u2_total = sum(u2_total.get(p["name"].lower(), 0) for p in completed_partners)
-    s4a_u2_pick = sum(u2_picked.get(p["name"].lower(), 0) for p in completed_partners)
+    s4a_u1_total = sum(_u1_for(p, u1_by)["total"] for p in completed_partners)
+    s4a_u1_mig = sum(_u1_for(p, u1_by)["migrated"] for p in completed_partners)
+    s4a_u2_total = sum(_u2_total_for(p, u2_total) for p in completed_partners)
+    s4a_u2_pick = sum(_u2_picked_for(p, u2_picked) for p in completed_partners)
     s4a_csps_completed = len(completed_partners)
 
     st.markdown(stage_card("STAGE 4a  —  EXECUTION COMPLETED (currently in S5 or S6)", STAGE_COLORS["S4c"], [
@@ -1319,14 +1360,15 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     s4_partners = by_state.get("S4", [])
     s4b_u1 = s4b_u1_mig = s4b_u2 = s4b_u2_pick = s4b_pending = 0
     for p in s4_partners:
-        key = p["name"].lower()
-        u1d = u1_by.get(key, {"total": 0, "migrated": 0})
+        u1d = _u1_for(p, u1_by)
+        u2t = _u2_total_for(p, u2_total)
+        u2p = _u2_picked_for(p, u2_picked)
         s4b_u1 += u1d["total"]
         s4b_u1_mig += u1d["migrated"]
-        s4b_u2 += u2_total.get(key, 0)
-        s4b_u2_pick += u2_picked.get(key, 0)
+        s4b_u2 += u2t
+        s4b_u2_pick += u2p
         # If CSP has no sheet data, count its R15 active as "pending to add"
-        if u1d["total"] == 0 and u2_total.get(key, 0) == 0:
+        if u1d["total"] == 0 and u2t == 0:
             s4b_pending += r15_of(p)
     s4b_csps = len(s4_partners)
 
@@ -1343,10 +1385,10 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     # ── S5 — Reconciliation (Netbox metrics) ─────────────────────────────────
     s5_u1_total = s5_u1_mig = s5_u2_total = s5_u2_picked = 0
     for p in s5_partners:
-        key = p["name"].lower()
-        u1d = u1_by.get(key, {"total": 0, "migrated": 0})
+        u1d = _u1_for(p, u1_by)
         s5_u1_total += u1d["total"]; s5_u1_mig += u1d["migrated"]
-        s5_u2_total += u2_total.get(key, 0); s5_u2_picked += u2_picked.get(key, 0)
+        s5_u2_total += _u2_total_for(p, u2_total)
+        s5_u2_picked += _u2_picked_for(p, u2_picked)
     s5_could_not_pick_raw = (s5_u1_total - s5_u1_mig) + (s5_u2_total - s5_u2_picked)
     dup = s5_dedup.get("duplicates", 0)
     s5_could_not_pick = max(s5_could_not_pick_raw - dup, 0)

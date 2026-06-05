@@ -55,6 +55,45 @@ SHEET_NAME_ALIAS = {
     "khan enterprises": "Manisha Traders 1",
 }
 
+# Partner-code attribution overrides — used when two Supabase partners share
+# the same sheet name. Each entry pins the per-partner sheet values directly,
+# bypassing the name-based lookup that would otherwise double-count.
+# Keep in sync with dashboard.py ATTRIBUTION_OVERRIDE.
+ATTRIBUTION_OVERRIDE = {
+    "274877952814":    {"u1_total": 7, "u1_migrated": 0,
+                        "u2_total": 78, "u2_picked": 0},
+    "281749855023736": {"u1_total": 2, "u1_migrated": 0,
+                        "u2_total": 0, "u2_picked": 0},
+}
+
+
+def _u1_for(p, u1_by):
+    code = str(p.get("partner_code") or "")
+    if code in ATTRIBUTION_OVERRIDE:
+        ov = ATTRIBUTION_OVERRIDE[code]
+        return {"total": ov["u1_total"], "migrated": ov["u1_migrated"]}
+    key = p["name"].lower()
+    key = SHEET_NAME_ALIAS.get(key, p["name"]).lower() if key in SHEET_NAME_ALIAS else key
+    return u1_by.get(key, {"total": 0, "migrated": 0})
+
+
+def _u2_total_for(p, u2_total):
+    code = str(p.get("partner_code") or "")
+    if code in ATTRIBUTION_OVERRIDE:
+        return ATTRIBUTION_OVERRIDE[code]["u2_total"]
+    key = p["name"].lower()
+    key = SHEET_NAME_ALIAS.get(key, p["name"]).lower() if key in SHEET_NAME_ALIAS else key
+    return u2_total.get(key, 0)
+
+
+def _u2_picked_for(p, u2_picked):
+    code = str(p.get("partner_code") or "")
+    if code in ATTRIBUTION_OVERRIDE:
+        return ATTRIBUTION_OVERRIDE[code]["u2_picked"]
+    key = p["name"].lower()
+    key = SHEET_NAME_ALIAS.get(key, p["name"]).lower() if key in SHEET_NAME_ALIAS else key
+    return u2_picked.get(key, 0)
+
 
 def _to_int(v):
     try:
@@ -363,30 +402,31 @@ WHERE MOBILE IN ({m_in})""")
         return SHEET_NAME_ALIAS.get(n, p["name"]).lower() if n in SHEET_NAME_ALIAS else n
 
     s4a_csps = len(completed)
-    s4a_u1_total = sum(u1_by.get(key_of(p), {}).get("total", 0) for p in completed)
-    s4a_u1_mig = sum(u1_by.get(key_of(p), {}).get("migrated", 0) for p in completed)
-    s4a_u2_total = sum(u2_total.get(key_of(p), 0) for p in completed)
-    s4a_u2_pick = sum(u2_picked.get(key_of(p), 0) for p in completed)
+    s4a_u1_total = sum(_u1_for(p, u1_by)["total"] for p in completed)
+    s4a_u1_mig = sum(_u1_for(p, u1_by)["migrated"] for p in completed)
+    s4a_u2_total = sum(_u2_total_for(p, u2_total) for p in completed)
+    s4a_u2_pick = sum(_u2_picked_for(p, u2_picked) for p in completed)
 
     s4b_csps = len(s4_partners)
     s4b_u1 = s4b_u1_mig = s4b_u2 = s4b_u2_pick = s4b_pending = 0
     for p in s4_partners:
-        k = key_of(p)
-        u1d = u1_by.get(k, {"total": 0, "migrated": 0})
+        u1d = _u1_for(p, u1_by)
+        u2t = _u2_total_for(p, u2_total)
+        u2p = _u2_picked_for(p, u2_picked)
         s4b_u1 += u1d["total"]
         s4b_u1_mig += u1d["migrated"]
-        s4b_u2 += u2_total.get(k, 0)
-        s4b_u2_pick += u2_picked.get(k, 0)
-        if u1d["total"] == 0 and u2_total.get(k, 0) == 0:
+        s4b_u2 += u2t
+        s4b_u2_pick += u2p
+        if u1d["total"] == 0 and u2t == 0:
             s4b_pending += r15_of(p)
 
     # S5 reconciliation
     s5_u1_total = s5_u1_mig = s5_u2_total = s5_u2_picked = 0
     for p in s5_partners:
-        k = key_of(p)
-        u1d = u1_by.get(k, {"total": 0, "migrated": 0})
+        u1d = _u1_for(p, u1_by)
         s5_u1_total += u1d["total"]; s5_u1_mig += u1d["migrated"]
-        s5_u2_total += u2_total.get(k, 0); s5_u2_picked += u2_picked.get(k, 0)
+        s5_u2_total += _u2_total_for(p, u2_total)
+        s5_u2_picked += _u2_picked_for(p, u2_picked)
     raw_cnp = (s5_u1_total - s5_u1_mig) + (s5_u2_total - s5_u2_picked)
     s5_could_not_pick = max(raw_cnp - s5_dup, 0)
     s5_liability = idle_total + s5_could_not_pick
