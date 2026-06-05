@@ -16,7 +16,7 @@ import os
 import re
 import sys
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import gspread
@@ -111,8 +111,20 @@ def main():
         print(f"First 200 chars of value: {raw_gcp[:200]!r}")
         sys.exit(1)
 
-    today_str = datetime.now(IST).strftime("%Y-%m-%d")
-    print(f"Snapshot date (IST): {today_str}")
+    # Late-night capture pattern: the cron runs at 23:55 IST, just before
+    # midnight. The snapshot represents "end of TODAY", which is the D-1
+    # baseline for TOMORROW's dashboard view. So we label the row with
+    # tomorrow's date so dashboard's "today's row" lookup finds it.
+    now_ist = datetime.now(IST)
+    if now_ist.hour >= 23:
+        target_date = (now_ist + timedelta(days=1)).strftime("%Y-%m-%d")
+        print(f"Late-night capture at {now_ist.strftime('%H:%M IST')} - "
+              f"labeling row as next day: {target_date}")
+    else:
+        target_date = now_ist.strftime("%Y-%m-%d")
+        print(f"Capture at {now_ist.strftime('%H:%M IST')} - "
+              f"labeling row as today: {target_date}")
+    today_str = target_date  # rest of script uses today_str as the row date
 
     # ── 2. Google Sheet client + idempotency check ─────────────────────────
     creds = Credentials.from_service_account_info(

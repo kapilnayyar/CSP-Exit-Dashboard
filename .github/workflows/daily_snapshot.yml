@@ -1,11 +1,12 @@
-name: Daily Snapshot (00:00 IST)
+name: Daily Snapshot (23:55 IST)
 
-# Runs every day at 00:00 IST = 18:30 UTC the previous day.
-# Captures the day's opening totals into the 'Daily Totals' Google Sheet tab
-# so Tab 5 D-1 always reflects yesterday's close-of-business state.
+# Runs every day at 23:55 IST = 18:25 UTC.
+# Captures the day's CLOSING totals (5 min before midnight) and labels the row
+# with TOMORROW's date so the next-day dashboard reads it as D-1 = yesterday's
+# close-of-business.
 on:
   schedule:
-    - cron: "30 18 * * *"
+    - cron: "25 18 * * *"
   workflow_dispatch:  # also allow manual trigger from GitHub UI
 
 jobs:
