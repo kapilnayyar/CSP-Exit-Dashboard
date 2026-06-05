@@ -898,7 +898,13 @@ def write_today_totals(book, totals):
 
 
 def read_yesterday_totals(book):
-    """Return {column → int} for yesterday's row in Daily Totals; {} if missing."""
+    """Return {column → int} for the D-1 baseline in Daily Totals; {} if missing.
+
+    D-1 reads TODAY's stored row. Why: the GH-Action snapshot writes today's
+    row at exactly 00:00 IST — that snapshot IS yesterday's close-of-business.
+    So today's stored row = end-of-yesterday = correct D-1 baseline.
+    Delta on dashboard = live_now - today's_stored = today's movement.
+    """
     try:
         ws = book.worksheet(TOTALS_TAB)
     except Exception:
@@ -907,9 +913,9 @@ def read_yesterday_totals(book):
         rows = ws.get_all_records()
     except Exception:
         return {}
-    yesterday = (datetime.now(IST) - timedelta(days=1)).strftime("%Y-%m-%d")
+    today = datetime.now(IST).strftime("%Y-%m-%d")
     for r in rows:
-        if str(r.get("date") or "").strip() == yesterday:
+        if str(r.get("date") or "").strip() == today:
             out = {}
             for k in TOTALS_HEADERS[1:]:
                 try:
