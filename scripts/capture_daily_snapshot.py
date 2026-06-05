@@ -86,7 +86,17 @@ def main():
                 "GOOGLE_SHEET_ID", "GCP_CREDS_JSON"]
     missing = [k for k in required if not os.getenv(k)]
     if missing:
-        print(f"ERROR: missing env vars: {missing}")
+        print(f"ERROR: missing/empty env vars: {missing}")
+        print("These should be set as GitHub Actions secrets. Check that each "
+              "secret has a non-empty value at "
+              "github.com/<owner>/<repo>/settings/secrets/actions")
+        sys.exit(1)
+    # Extra check: GCP_CREDS_JSON must parse as JSON, not just be non-empty
+    raw_gcp = os.getenv("GCP_CREDS_JSON", "").strip()
+    if not raw_gcp.startswith("{"):
+        print("ERROR: GCP_CREDS_JSON does not look like JSON "
+              f"(starts with: {raw_gcp[:30]!r}). "
+              "Re-paste the contents of google_credentials.json into the secret.")
         sys.exit(1)
 
     supabase_url = os.getenv("SUPABASE_URL").rstrip("/")
@@ -94,7 +104,12 @@ def main():
     mb_url = os.getenv("METABASE_URL").rstrip("/")
     mb_key = os.getenv("METABASE_API_KEY")
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
-    gcp_creds = json.loads(os.getenv("GCP_CREDS_JSON"))
+    try:
+        gcp_creds = json.loads(raw_gcp)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: GCP_CREDS_JSON is set but not valid JSON: {e}")
+        print(f"First 200 chars of value: {raw_gcp[:200]!r}")
+        sys.exit(1)
 
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
     print(f"Snapshot date (IST): {today_str}")
