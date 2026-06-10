@@ -45,6 +45,52 @@ SHEET_NAME_ALIAS = {
     "khan enterprises": "MANISHA TRADERS 1",
 }
 
+# ── Tab 6: 99-CSP cohort + U2 source split ─────────────────────────────────
+# The 99 partner_codes that make up the "99 CSP Exit Funnel" cohort. These
+# CSPs are tracked across two U2 sources:
+#   - 7 CSPs (SHEET_U2_FOR_TAB6): U2 still in Google Sheet "Main sheet" tab
+#   - 92 CSPs (the other ones): U2 in the device-pickup Railway portal
+# When the cohort changes, edit these two sets together.
+COHORT_99_CODES = {
+    281749854708851, 281749854725931, 281749854677692, 281749854619981,
+    281749854766357, 281749854731744, 281749854768114, 281749854637038,
+    281749854707709, 281749854684551, 281749855022004, 281749854623644,
+    281749854729428, 281749854670212, 281749854787797, 281749854746885,
+    274877928997,    281749854703426, 281749854696220, 274877948607,
+    281749854789049, 281749854697492, 281749854670961, 281749854768255,
+    281749854785507, 281749854677689, 281749854704590, 281749854696929,
+    281749854618775, 281749854674660, 281749854640986, 281749854687004,
+    281749854841838, 281749854669890, 281749854800370, 281749854680366,
+    281749854816387, 281749854629540, 281749854737732, 281749854709895,
+    281749854661868, 274877931333,    281749854632855, 281749854815209,
+    281749854674788, 281749854617630, 281749855015771, 281749854791717,
+    274877946732,    281749854768819, 281749854735553, 281749854663367,
+    281749854738174, 281749854618031, 281749854707711, 274877915129,
+    274877945596,    281749854689803, 281749854699274, 281749854771164,
+    281749854763240, 281749854778735, 281749854806857, 274877936852,
+    281749854790294, 274877951093,    274877949556,    281749854655716,
+    281749854661166, 281749854632441, 281749854620973, 274877947896,
+    274877952814,    281749854634853, 274877938582,    281749854664253,
+    281749854814818, 281749854676976, 281749854707924, 281749854623253,
+    281749854632443, 281749854637030, 281749854619437, 274877951823,
+    281749854680061, 281749854728128, 281749854690137, 281749854798775,
+    281749854664264, 281749854733695, 281749854787244, 281749854666358,
+    281749854692917, 274877925471,    281749854619807, 281749854698314,
+    281749854630110, 281749854750168, 281749854750173,
+}
+
+# These 7 (subset of COHORT_99) take U2 from the Google Sheet (like Tab 2).
+# All other COHORT_99 members take U2 from the portal.
+SHEET_U2_FOR_TAB6 = {
+    281749854623644,  # Choudhary Broadband - Kabir Nagar
+    281749854787797,  # Dharmendra Kumar
+    281749854696220,  # Easy Network Faridabad
+    281749854791717,  # Priyanka infosolution
+    281749854768819,  # Raghav digital channels
+    274877951823,     # Tarun Cable TV Network
+    281749854690137,  # ULTRA NET-South Delhi
+}
+
 # Partner-code-based attribution override for name collisions in the sheet.
 # When two Supabase partners share the same name, sum-by-name in the sheet
 # double-counts. Each entry here pins the per-partner sheet values; the
@@ -119,6 +165,9 @@ def get_secrets():
             "supabase_key": st.secrets.get("SUPABASE_ANON_KEY", ""),
             "metabase_url": st.secrets.get("METABASE_URL", ""),
             "metabase_key": st.secrets.get("METABASE_API_KEY", ""),
+            "portal_url": st.secrets.get("PORTAL_URL", ""),
+            "portal_email": st.secrets.get("PORTAL_EMAIL", ""),
+            "portal_password": st.secrets.get("PORTAL_PASSWORD", ""),
         }
     except Exception:
         from dotenv import load_dotenv
@@ -133,6 +182,9 @@ def get_secrets():
             "supabase_key": os.getenv("SUPABASE_ANON_KEY", ""),
             "metabase_url": os.getenv("METABASE_URL", ""),
             "metabase_key": os.getenv("METABASE_API_KEY", ""),
+            "portal_url": os.getenv("PORTAL_URL", ""),
+            "portal_email": os.getenv("PORTAL_EMAIL", ""),
+            "portal_password": os.getenv("PORTAL_PASSWORD", ""),
         }
 
 
@@ -406,6 +458,45 @@ WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" IN ({in_list})
     for row in res["rows"]:
         out[str(row[0])].add(str(row[1]))
     return out
+
+
+@st.cache_data(ttl=300)
+def fetch_portal_pickups(portal_url, email, password):
+    """Tab 6 — login to the device-pickup Railway portal, pull all U2 cases.
+
+    Returns {"by_csp": {csp_name_lower: {"total": N, "picked": M}},
+             "error": None or str}.
+    View-only — POST /api/login then GET /api/pickups?full=1.
+    "picked" = cases whose picked_up_at is set (= 'Closed'/picked-up state).
+    """
+    if not portal_url or not email or not password:
+        return {"by_csp": {}, "error": "Portal credentials not configured"}
+    try:
+        session = requests.Session()
+        session.headers.update({"User-Agent": "Mozilla/5.0 csp-dashboard"})
+        r = session.post(
+            f"{portal_url}/api/login",
+            json={"email": email, "password": password},
+            timeout=15,
+        )
+        r.raise_for_status()
+        resp = session.get(f"{portal_url}/api/pickups?full=1", timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        by_csp = defaultdict(lambda: {"total": 0, "picked": 0})
+        for p in data.get("pickups", []):
+            name = str(p.get("csp_name") or "").strip()
+            if not name:
+                continue
+            key = name.lower()
+            by_csp[key]["total"] += 1
+            # Picked-up-by-team = picked_up_at is set, OR status is "closed"
+            # (the portal's terminal-state semantics; both checked for safety).
+            if p.get("picked_up_at") or str(p.get("status") or "").lower() == "closed":
+                by_csp[key]["picked"] += 1
+        return {"by_csp": dict(by_csp), "error": None}
+    except Exception as e:
+        return {"by_csp": {}, "error": f"{type(e).__name__}: {str(e)[:200]}"}
 
 
 @st.cache_data(ttl=300)
@@ -711,10 +802,15 @@ def build_sheet_lookups(u1_rows, u2_rows):
         key = name.lower()
         key = SHEET_NAME_ALIAS.get(key, name).lower() if key in SHEET_NAME_ALIAS else key
         # Aggregate if alias collapses multiple sheet names into one canonical
-        existing = u1_by.get(key, {"total": 0, "migrated": 0})
+        existing = u1_by.get(key, {"total": 0, "migrated": 0,
+                                   "not_migrated": 0, "wip": 0})
         u1_by[key] = {
             "total": existing["total"] + _to_int(r.get("Total U1 User")),
             "migrated": existing["migrated"] + _to_int(r.get("Migrated")),
+            # New fields for Tab 6 cohort breakdown
+            "not_migrated": existing["not_migrated"] + _to_int(r.get("Not Migrated")),
+            "wip": existing["wip"]
+                   + _to_int(r.get("WIP") or r.get("Migration in process")),
         }
     u2_total = defaultdict(int)
     u2_picked = defaultdict(int)
@@ -1265,6 +1361,100 @@ def render_tab5_funnel_with_delta(m, y):
 
 
 
+def render_tab6_99_funnel(partners, u1_by, u2_total, u2_picked,
+                          r15_by_code, portal_pickups):
+    """Tab 6 — 99-CSP Exit Funnel.
+
+    Cohort: COHORT_99_CODES (hardcoded).
+    U2 source split:
+      - 7 CSPs in SHEET_U2_FOR_TAB6: U2 + Device Picked from Google Sheet
+      - other 92: U2 + Device Picked from Railway pickup portal
+    """
+    # Filter cohort from the full partners list (also drops EXCLUDED ones)
+    cohort = [p for p in partners
+              if int(p.get("partner_code") or 0) in COHORT_99_CODES]
+    n_csps = len(cohort)
+
+    # ── Sums ────────────────────────────────────────────────────────────────
+    u1_total = sum(_u1_for(p, u1_by)["total"] for p in cohort)
+    u1_migrated = sum(_u1_for(p, u1_by)["migrated"] for p in cohort)
+    u1_not_mig = sum(_u1_for(p, u1_by).get("not_migrated", 0) for p in cohort)
+    u1_wip = sum(_u1_for(p, u1_by).get("wip", 0) for p in cohort)
+
+    # Split U2 by source
+    u2_total_count = 0
+    u2_picked_count = 0
+    portal_err = portal_pickups.get("error") if portal_pickups else "no data"
+    by_csp = (portal_pickups or {}).get("by_csp", {})
+    portal_missing_names = []
+    for p in cohort:
+        code = int(p.get("partner_code") or 0)
+        name_key = p["name"].lower()
+        name_key = (SHEET_NAME_ALIAS.get(name_key, p["name"]).lower()
+                    if name_key in SHEET_NAME_ALIAS else name_key)
+        if code in SHEET_U2_FOR_TAB6:
+            # Sheet-sourced U2 (same logic Tab 2 uses)
+            u2_total_count += _u2_total_for(p, u2_total)
+            u2_picked_count += _u2_picked_for(p, u2_picked)
+        else:
+            # Portal-sourced U2
+            stats = by_csp.get(name_key)
+            if stats is None:
+                portal_missing_names.append(p["name"])
+                continue
+            u2_total_count += stats.get("total", 0)
+            u2_picked_count += stats.get("picked", 0)
+
+    # Userbase = U1 + U2; fallback to R15 if both 0 for any partner
+    userbase = u1_total + u2_total_count
+    if userbase == 0:
+        userbase = sum(r15_by_code.get(str(p.get("partner_code") or ""), 0)
+                       for p in cohort)
+
+    # ── Header banner ──────────────────────────────────────────────────────
+    st.markdown(
+        f'<div style="background:#1F4E78;color:#ffffff;padding:14px;'
+        f'border-radius:8px;font-size:17px;font-weight:bold;text-align:center;'
+        f'margin-bottom:6px">'
+        f'99 CSP EXIT FUNNEL — {n_csps} of 99 partners matched in Supabase'
+        f'</div>', unsafe_allow_html=True)
+
+    if portal_err:
+        st.warning(
+            f"⚠ Portal U2 source unavailable: {portal_err}. "
+            f"The 92 portal-sourced CSPs will show 0 for U2 Userbase + Device "
+            f"Picked. The 7 sheet-sourced CSPs are unaffected."
+        )
+    if portal_missing_names:
+        with st.expander(f"ℹ {len(portal_missing_names)} cohort CSPs not found "
+                         f"in portal by name (click to see list)"):
+            for n in portal_missing_names:
+                st.write(f"• {n}")
+
+    # ── Single stage card with 6 (+3 sub) rows ──────────────────────────────
+    st.markdown(stage_card(
+        "99 CSP COHORT — SUMMARY", STAGE_COLORS["S1"], [
+            ("CSPs", n_csps, "100.0%"),
+            ("Userbase", userbase, "100.0%"),
+            ("U1 Userbase", u1_total, fmt_pct(u1_total, userbase)),
+            ("  ↳ Migrated", u1_migrated, fmt_pct(u1_migrated, u1_total)),
+            ("  ↳ Not Migrated", u1_not_mig, fmt_pct(u1_not_mig, u1_total)),
+            ("  ↳ Work In Process", u1_wip, fmt_pct(u1_wip, u1_total)),
+            ("U2 Userbase", u2_total_count,
+             fmt_pct(u2_total_count, userbase)),
+            ("Device Picked by Team", u2_picked_count,
+             fmt_pct(u2_picked_count, u2_total_count)),
+        ]
+    ), unsafe_allow_html=True)
+
+    st.caption(
+        f"U2 source split: {len(SHEET_U2_FOR_TAB6)} CSPs from Google Sheet "
+        f"(same as Tab 2), {n_csps - len(SHEET_U2_FOR_TAB6)} CSPs from "
+        f"the Device Pickup Portal."
+    )
+
+
+
 def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup, idle_total_s6=0, netbox_collected_by_code=None):
     """Tab 2 — funnel. S1/S2/S3 are cumulative; S4a/S4b/S5/S6 are current snapshots.
     % computed against S1 totals."""
@@ -1666,9 +1856,9 @@ def render():
     except Exception:
         pass
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Status & Cohorts", "CSP Exit Funnel", "Data Quality", "Search",
-        "Daily Funnel + Delta",
+        "Daily Funnel + Delta", "99 CSP Exit Funnel",
     ])
     with tab1:
         render_tab1_status(u1, u2)
@@ -1683,6 +1873,15 @@ def render():
         render_tab4_search(partners, u2_rows, secrets)
     with tab5:
         render_tab5_funnel_with_delta(today_metrics, yest_totals)
+    with tab6:
+        portal_pickups = fetch_portal_pickups(
+            secrets.get("portal_url", ""),
+            secrets.get("portal_email", ""),
+            secrets.get("portal_password", ""),
+        )
+        render_tab6_99_funnel(
+            partners, u1_by, u2_total, u2_picked, r15_by_code, portal_pickups,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
