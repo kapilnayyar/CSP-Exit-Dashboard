@@ -1431,19 +1431,49 @@ def render_tab6_99_funnel(partners, u1_by, u2_total, u2_picked,
             for n in portal_missing_names:
                 st.write(f"• {n}")
 
-    # ── Single stage card with 6 (+3 sub) rows ──────────────────────────────
+    # ── Single stage card — U1 and U2 use Tab 2-style multi-line bulleted rows
+    lh = "line-height:1.9"
+
+    # U1 row: U1 Userbase + 3 sub-buckets (Migrated / Not Migrated / WIP)
+    u1_cat = (
+        f'<div style="{lh}"><b>U1 Userbase</b><br>'
+        f'<span style="color:#666">&nbsp;&nbsp;&nbsp;&nbsp;&bull;&nbsp;Migrated</span><br>'
+        f'<span style="color:#666">&nbsp;&nbsp;&nbsp;&nbsp;&bull;&nbsp;Not Migrated</span><br>'
+        f'<span style="color:#666">&nbsp;&nbsp;&nbsp;&nbsp;&bull;&nbsp;Work In Process</span></div>'
+    )
+    u1_cnt = (
+        f'<div style="{lh}"><b>{u1_total:,}</b><br>'
+        f'<span style="color:#666">{u1_migrated:,}</span><br>'
+        f'<span style="color:#666">{u1_not_mig:,}</span><br>'
+        f'<span style="color:#666">{u1_wip:,}</span></div>'
+    )
+    u1_pct = (
+        f'<div style="{lh}"><b>{fmt_pct(u1_total, userbase)}</b><br>'
+        f'<span style="color:#666">{fmt_pct(u1_migrated, u1_total)}</span><br>'
+        f'<span style="color:#666">{fmt_pct(u1_not_mig, u1_total)}</span><br>'
+        f'<span style="color:#666">{fmt_pct(u1_wip, u1_total)}</span></div>'
+    )
+
+    # U2 row: U2 Userbase + Device Picked by Team as a sub-bullet
+    u2_cat = (
+        f'<div style="{lh}"><b>U2 Userbase</b><br>'
+        f'<span style="color:#666">&nbsp;&nbsp;&nbsp;&nbsp;&bull;&nbsp;Device Picked by Team</span></div>'
+    )
+    u2_cnt = (
+        f'<div style="{lh}"><b>{u2_total_count:,}</b><br>'
+        f'<span style="color:#666">{u2_picked_count:,}</span></div>'
+    )
+    u2_pct = (
+        f'<div style="{lh}"><b>{fmt_pct(u2_total_count, userbase)}</b><br>'
+        f'<span style="color:#666">{fmt_pct(u2_picked_count, u2_total_count)}</span></div>'
+    )
+
     st.markdown(stage_card(
         "99 CSP COHORT — SUMMARY", STAGE_COLORS["S1"], [
             ("CSPs", n_csps, "100.0%"),
             ("Userbase", userbase, "100.0%"),
-            ("U1 Userbase", u1_total, fmt_pct(u1_total, userbase)),
-            ("  ↳ Migrated", u1_migrated, fmt_pct(u1_migrated, u1_total)),
-            ("  ↳ Not Migrated", u1_not_mig, fmt_pct(u1_not_mig, u1_total)),
-            ("  ↳ Work In Process", u1_wip, fmt_pct(u1_wip, u1_total)),
-            ("U2 Userbase", u2_total_count,
-             fmt_pct(u2_total_count, userbase)),
-            ("Device Picked by Team", u2_picked_count,
-             fmt_pct(u2_picked_count, u2_total_count)),
+            (u1_cat, u1_cnt, u1_pct),
+            (u2_cat, u2_cnt, u2_pct),
         ]
     ), unsafe_allow_html=True)
 
