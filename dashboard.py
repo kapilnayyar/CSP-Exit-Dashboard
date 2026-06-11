@@ -98,13 +98,16 @@ SHEET_U2_FOR_TAB6 = {
 # name-based lookup is bypassed for these specific partner_codes.
 # Add a new entry whenever a new collision is identified.
 ATTRIBUTION_OVERRIDE = {
-    # S4 (B2) Shree Shyam Broadband — new, declared 2026-06-04. Owns the 7 U1
-    # row (Total U1=7, Migrated=blank) + all 78 U2 rows added today.
-    "274877952814":    {"u1_total": 7, "u1_migrated": 0,
+    # S4 (B2) Shree Shyam Broadband — declared 2026-06-04. Owns Migration Data
+    # row "Total U1=7" + 78 U2 Main-sheet rows. Re-sync with sheet whenever the
+    # team logs new Migrated/WIP/Not Migrated/Device picked numbers for this CSP.
+    "274877952814":    {"u1_total": 7, "u1_migrated": 3,
+                        "u1_not_migrated": 0, "u1_wip": 4,
                         "u2_total": 78, "u2_picked": 0},
     # S5 (Voluntary) Shree Shyam Broadband — older, exit 2026-04-07. Owns only
-    # the 2-U1 row (Total U1=2, Migrated=0, Reason="Plan Expired"). No U2.
+    # the "Total U1=2" row (Not Migrated=2, Reason="Plan Expired"). No U2.
     "281749855023736": {"u1_total": 2, "u1_migrated": 0,
+                        "u1_not_migrated": 2, "u1_wip": 0,
                         "u2_total": 0, "u2_picked": 0},
 }
 
@@ -113,9 +116,13 @@ def _u1_for(p, u1_by):
     code = str(p.get("partner_code") or "")
     if code in ATTRIBUTION_OVERRIDE:
         ov = ATTRIBUTION_OVERRIDE[code]
-        return {"total": ov["u1_total"], "migrated": ov["u1_migrated"]}
+        return {"total": ov["u1_total"],
+                "migrated": ov["u1_migrated"],
+                "not_migrated": ov.get("u1_not_migrated", 0),
+                "wip": ov.get("u1_wip", 0)}
     key = p["name"].lower()
-    return u1_by.get(key, {"total": 0, "migrated": 0})
+    return u1_by.get(key, {"total": 0, "migrated": 0,
+                           "not_migrated": 0, "wip": 0})
 
 
 def _u2_total_for(p, u2_total):
