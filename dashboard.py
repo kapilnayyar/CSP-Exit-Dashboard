@@ -101,8 +101,8 @@ ATTRIBUTION_OVERRIDE = {
     # S4 (B2) Shree Shyam Broadband — declared 2026-06-04. Owns Migration Data
     # row "Total U1=7" + 78 U2 Main-sheet rows. Re-sync with sheet whenever the
     # team logs new Migrated/WIP/Not Migrated/Device picked numbers for this CSP.
-    "274877952814":    {"u1_total": 7, "u1_migrated": 3,
-                        "u1_not_migrated": 0, "u1_wip": 4,
+    "274877952814":    {"u1_total": 7, "u1_migrated": 6,
+                        "u1_not_migrated": 0, "u1_wip": 1,
                         "u2_total": 78, "u2_picked": 0},
     # S5 (Voluntary) Shree Shyam Broadband — older, exit 2026-04-07. Owns only
     # the "Total U1=2" row (Not Migrated=2, Reason="Plan Expired"). No U2.
