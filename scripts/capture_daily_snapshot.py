@@ -63,11 +63,26 @@ SHEET_NAME_ALIAS = {
 # Keep in sync with dashboard.py ATTRIBUTION_OVERRIDE.
 ATTRIBUTION_OVERRIDE = {
     # Keep in sync with dashboard.py — re-sync with sheet when numbers move.
+    # Shree Shyam Broadband (S4 B2 + S5 Voluntary share name)
     "274877952814":    {"u1_total": 7, "u1_migrated": 6,
                         "u1_not_migrated": 0, "u1_wip": 1,
                         "u2_total": 78, "u2_picked": 0},
     "281749855023736": {"u1_total": 2, "u1_migrated": 0,
                         "u1_not_migrated": 2, "u1_wip": 0,
+                        "u2_total": 0, "u2_picked": 0},
+    # Riddhi Enterprises (2 S5 partners share name; sheet has Total U1=4)
+    "274877953157":    {"u1_total": 4, "u1_migrated": 0,
+                        "u1_not_migrated": 0, "u1_wip": 0,
+                        "u2_total": 0, "u2_picked": 0},
+    "281749854772211": {"u1_total": 0, "u1_migrated": 0,
+                        "u1_not_migrated": 0, "u1_wip": 0,
+                        "u2_total": 0, "u2_picked": 0},
+    # Sai Cable Network (2 S5 partners share name; sheet has no data yet)
+    "281749854778714": {"u1_total": 0, "u1_migrated": 0,
+                        "u1_not_migrated": 0, "u1_wip": 0,
+                        "u2_total": 0, "u2_picked": 0},
+    "281749854868832": {"u1_total": 0, "u1_migrated": 0,
+                        "u1_not_migrated": 0, "u1_wip": 0,
                         "u2_total": 0, "u2_picked": 0},
 }
 
