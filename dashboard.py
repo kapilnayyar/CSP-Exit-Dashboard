@@ -103,8 +103,8 @@ ATTRIBUTION_OVERRIDE = {
     # S4 B2 partner — declared 2026-06-04. Owns the Migration Data row
     # "Total U1=7" + 78 U2 Main-sheet rows. Re-sync with sheet whenever the
     # team logs new Migrated/WIP/Not Migrated/Device picked numbers for it.
-    "274877952814":    {"u1_total": 7, "u1_migrated": 6,
-                        "u1_not_migrated": 0, "u1_wip": 1,
+    "274877952814":    {"u1_total": 7, "u1_migrated": 7,
+                        "u1_not_migrated": 0, "u1_wip": 0,
                         "u2_total": 78, "u2_picked": 0},
     # S5 Voluntary partner — older, exit 2026-04-07. Owns only the "Total U1=2"
     # row (Not Migrated=2, Reason="Plan Expired"). No U2.

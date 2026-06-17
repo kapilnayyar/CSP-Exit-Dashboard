@@ -64,8 +64,8 @@ SHEET_NAME_ALIAS = {
 ATTRIBUTION_OVERRIDE = {
     # Keep in sync with dashboard.py — re-sync with sheet when numbers move.
     # Shree Shyam Broadband (S4 B2 + S5 Voluntary share name)
-    "274877952814":    {"u1_total": 7, "u1_migrated": 6,
-                        "u1_not_migrated": 0, "u1_wip": 1,
+    "274877952814":    {"u1_total": 7, "u1_migrated": 7,
+                        "u1_not_migrated": 0, "u1_wip": 0,
                         "u2_total": 78, "u2_picked": 0},
     "281749855023736": {"u1_total": 2, "u1_migrated": 0,
                         "u1_not_migrated": 2, "u1_wip": 0,
