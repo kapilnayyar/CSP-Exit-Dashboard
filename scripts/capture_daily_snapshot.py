@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sys
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -62,25 +63,25 @@ SHEET_NAME_ALIAS = {
 # bypassing the name-based lookup that would otherwise double-count.
 # Keep in sync with dashboard.py ATTRIBUTION_OVERRIDE.
 ATTRIBUTION_OVERRIDE = {
-    # Keep in sync with dashboard.py — re-sync with sheet when numbers move.
-    # Shree Shyam Broadband (S4 B2 + S5 Voluntary share name)
+    # Mirror of dashboard.py ATTRIBUTION_OVERRIDE — must stay in sync.
+    # "auto" sentinel = use the live sheet aggregate for that field.
+    # Pattern: one collision-owner uses "auto" so it auto-syncs; the others
+    # are forced to 0 to avoid double-counting.
     "274877952814":    {"u1_total": 7, "u1_migrated": 7,
                         "u1_not_migrated": 0, "u1_wip": 0,
-                        "u2_total": 78, "u2_picked": 0},
+                        "u2_total": "auto", "u2_picked": "auto"},
     "281749855023736": {"u1_total": 2, "u1_migrated": 0,
                         "u1_not_migrated": 2, "u1_wip": 0,
                         "u2_total": 0, "u2_picked": 0},
-    # Riddhi Enterprises (2 S5 partners share name; sheet has Total U1=4)
-    "274877953157":    {"u1_total": 4, "u1_migrated": 0,
-                        "u1_not_migrated": 0, "u1_wip": 0,
-                        "u2_total": 0, "u2_picked": 0},
+    "274877953157":    {"u1_total": "auto", "u1_migrated": "auto",
+                        "u1_not_migrated": "auto", "u1_wip": "auto",
+                        "u2_total": "auto", "u2_picked": "auto"},
     "281749854772211": {"u1_total": 0, "u1_migrated": 0,
                         "u1_not_migrated": 0, "u1_wip": 0,
                         "u2_total": 0, "u2_picked": 0},
-    # Sai Cable Network (2 S5 partners share name; sheet has no data yet)
-    "281749854778714": {"u1_total": 0, "u1_migrated": 0,
-                        "u1_not_migrated": 0, "u1_wip": 0,
-                        "u2_total": 0, "u2_picked": 0},
+    "281749854778714": {"u1_total": "auto", "u1_migrated": "auto",
+                        "u1_not_migrated": "auto", "u1_wip": "auto",
+                        "u2_total": "auto", "u2_picked": "auto"},
     "281749854868832": {"u1_total": 0, "u1_migrated": 0,
                         "u1_not_migrated": 0, "u1_wip": 0,
                         "u2_total": 0, "u2_picked": 0},
@@ -88,30 +89,42 @@ ATTRIBUTION_OVERRIDE = {
 
 
 def _u1_for(p, u1_by):
+    """U1 metrics: 'auto' override fields fall back to live sheet aggregate."""
     code = str(p.get("partner_code") or "")
-    if code in ATTRIBUTION_OVERRIDE:
-        ov = ATTRIBUTION_OVERRIDE[code]
-        return {"total": ov["u1_total"], "migrated": ov["u1_migrated"]}
     key = p["name"].lower()
     key = SHEET_NAME_ALIAS.get(key, p["name"]).lower() if key in SHEET_NAME_ALIAS else key
-    return u1_by.get(key, {"total": 0, "migrated": 0})
+    sheet_val = u1_by.get(key, {"total": 0, "migrated": 0})
+    if code not in ATTRIBUTION_OVERRIDE:
+        return sheet_val
+    ov = ATTRIBUTION_OVERRIDE[code]
+    def pick(field, ov_field):
+        v = ov.get(ov_field, 0)
+        return sheet_val.get(field, 0) if v == "auto" else v
+    return {"total": pick("total", "u1_total"),
+            "migrated": pick("migrated", "u1_migrated")}
 
 
 def _u2_total_for(p, u2_total):
     code = str(p.get("partner_code") or "")
-    if code in ATTRIBUTION_OVERRIDE:
-        return ATTRIBUTION_OVERRIDE[code]["u2_total"]
     key = p["name"].lower()
     key = SHEET_NAME_ALIAS.get(key, p["name"]).lower() if key in SHEET_NAME_ALIAS else key
+    if code in ATTRIBUTION_OVERRIDE:
+        v = ATTRIBUTION_OVERRIDE[code]["u2_total"]
+        if v == "auto":
+            return u2_total.get(key, 0)
+        return v
     return u2_total.get(key, 0)
 
 
 def _u2_picked_for(p, u2_picked):
     code = str(p.get("partner_code") or "")
-    if code in ATTRIBUTION_OVERRIDE:
-        return ATTRIBUTION_OVERRIDE[code]["u2_picked"]
     key = p["name"].lower()
     key = SHEET_NAME_ALIAS.get(key, p["name"]).lower() if key in SHEET_NAME_ALIAS else key
+    if code in ATTRIBUTION_OVERRIDE:
+        v = ATTRIBUTION_OVERRIDE[code]["u2_picked"]
+        if v == "auto":
+            return u2_picked.get(key, 0)
+        return v
     return u2_picked.get(key, 0)
 
 
@@ -248,8 +261,13 @@ def main():
         key = name.lower()
         key = SHEET_NAME_ALIAS.get(key, name).lower() if key in SHEET_NAME_ALIAS else key
         u2_total[key] += 1
+        # PICKED RULE: customer counts as picked if EITHER column says so —
+        # Remarks Dropdown == 'Device picked up'  OR
+        # Device Picked (Ajinkya/Pradeep) == 'Yes' (both case-insensitive).
+        # Mirrors dashboard.py's _u2_row_is_picked helper. Keep in sync.
         remark = str(row.get("Remarks Dropdown") or "").strip().lower()
-        if remark == "device picked up":
+        pradeep = str(row.get("Device Picked (Ajinkya/Pradeep)") or "").strip().lower()
+        if remark == "device picked up" or pradeep == "yes":
             u2_picked[key] += 1
         else:
             u2_pending_by_name[key].append(str(mobile).strip())
@@ -281,6 +299,14 @@ def main():
     all_codes = [str(p["partner_code"]) for p in partners]
 
     # ── 7. Idle devices: total for S5, total for S6, NAS sets for S5 ───────
+    # IMPORTANT — STABILIZE THE NAS SET:
+    # The "IDLE" status in the inventory can flicker per NAS for short windows
+    # (inventory polling cycle, transient state during refresh). If the snapshot
+    # query fires at a moment when N NAS_IDs are transiently not showing IDLE,
+    # the dedup count downstream drops by N → could_not_pick inflates by N → a
+    # phantom +N delta appears the next day. Fix: take 3 measurements 30s apart
+    # and UNION the NAS sets. A NAS counted as IDLE in ANY measurement is kept
+    # in the dedup pool — transient drops get absorbed.
     idle_total = 0
     idle_total_s6 = 0
     idle_nas_by_code = defaultdict(set)
@@ -290,13 +316,22 @@ def main():
 WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" IN ({in_s5})""")
         idle_total = int(rows[0][0]) if rows else 0
 
-        rows = mb_run(f"""SELECT td."LCO_ACCOUNT_ID", td."NASID"
+        measurement_sizes = []
+        for attempt in range(3):
+            if attempt > 0:
+                time.sleep(30)
+            rows = mb_run(f"""SELECT td."LCO_ACCOUNT_ID", td."NASID"
 FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
 WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" IN ({in_s5})
   AND td."NASID" IS NOT NULL""")
-        for code, nas in rows:
-            if nas:
-                idle_nas_by_code[str(code)].add(str(nas))
+            this_pass = 0
+            for code, nas in rows:
+                if nas:
+                    idle_nas_by_code[str(code)].add(str(nas))
+                    this_pass += 1
+            measurement_sizes.append(this_pass)
+        total_nas = sum(len(v) for v in idle_nas_by_code.values())
+        print(f"Idle NAS measurements (per pass): {measurement_sizes}  union total: {total_nas}")
     if s6_codes:
         in_s6 = _metabase_id_in_list(s6_codes)
         rows = mb_run(f"""SELECT COUNT(*) FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td

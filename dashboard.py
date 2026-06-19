@@ -99,34 +99,39 @@ SHEET_U2_FOR_TAB6 = {
 # name-based lookup is bypassed for these specific partner_codes.
 # Add a new entry whenever a new collision is identified.
 ATTRIBUTION_OVERRIDE = {
-    # ── Shree Shyam Broadband (2 partners, same name) ────────────────────────
-    # S4 B2 partner — declared 2026-06-04. Owns the Migration Data row
-    # "Total U1=7" + 78 U2 Main-sheet rows. Re-sync with sheet whenever the
-    # team logs new Migrated/WIP/Not Migrated/Device picked numbers for it.
+    # NAME-COLLISION ATTRIBUTION
+    # When two Supabase partners share the same sheet name (lowercased), the
+    # name-based lookup would double-count them. We pin per-partner values here.
+    # Field value can be either:
+    #   - a literal int (hardcoded — pin to that exact number)
+    #   - "auto" sentinel — fall back to the live sheet lookup for that field
+    # Pattern: pick ONE partner as the "owner" (uses "auto" so it auto-syncs
+    # from the sheet); force ALL other collision-mates to 0. No manual bumps.
+    #
+    # ── Shree Shyam Broadband (S4 B2 + S5 Voluntary share name) ──────────────
+    # The Migration Data sheet has TWO rows under "Shree Shyam Broadband"
+    # (Total U1=7 for the S4 B2 partner, Total U1=2 for the S5). They CAN'T
+    # be split by sheet lookup → U1 stays hardcoded. U2 has all sheet rows
+    # belonging to the S4 B2 partner — safe to auto-sync.
     "274877952814":    {"u1_total": 7, "u1_migrated": 7,
                         "u1_not_migrated": 0, "u1_wip": 0,
-                        "u2_total": 78, "u2_picked": 0},
-    # S5 Voluntary partner — older, exit 2026-04-07. Owns only the "Total U1=2"
-    # row (Not Migrated=2, Reason="Plan Expired"). No U2.
+                        "u2_total": "auto", "u2_picked": "auto"},
     "281749855023736": {"u1_total": 2, "u1_migrated": 0,
                         "u1_not_migrated": 2, "u1_wip": 0,
                         "u2_total": 0, "u2_picked": 0},
-    # ── Riddhi Enterprises (2 S5 partners, same name) ───────────────────────
-    # Migration Data has Total U1=4 for the name; attribute all 4 to the first
-    # partner (and any U1 movements) — the second contributes 0 to avoid
-    # double-counting.  No U2 sheet rows for either.
-    "274877953157":    {"u1_total": 4, "u1_migrated": 0,
-                        "u1_not_migrated": 0, "u1_wip": 0,
-                        "u2_total": 0, "u2_picked": 0},
+    # ── Riddhi Enterprises (2 S5 partners share name) ───────────────────────
+    # First partner = owner, auto-syncs U1+U2 from sheet. Second forced to 0.
+    "274877953157":    {"u1_total": "auto", "u1_migrated": "auto",
+                        "u1_not_migrated": "auto", "u1_wip": "auto",
+                        "u2_total": "auto", "u2_picked": "auto"},
     "281749854772211": {"u1_total": 0, "u1_migrated": 0,
                         "u1_not_migrated": 0, "u1_wip": 0,
                         "u2_total": 0, "u2_picked": 0},
-    # ── Sai Cable Network (2 S5 partners, same name) ────────────────────────
-    # Currently no sheet data — but pinned to 0 so if the team adds rows under
-    # the shared name later, we won't silently double-count.
-    "281749854778714": {"u1_total": 0, "u1_migrated": 0,
-                        "u1_not_migrated": 0, "u1_wip": 0,
-                        "u2_total": 0, "u2_picked": 0},
+    # ── Sai Cable Network (2 S5 partners share name; no sheet data yet) ─────
+    # First partner = owner with auto (future-proof). Second forced to 0.
+    "281749854778714": {"u1_total": "auto", "u1_migrated": "auto",
+                        "u1_not_migrated": "auto", "u1_wip": "auto",
+                        "u2_total": "auto", "u2_picked": "auto"},
     "281749854868832": {"u1_total": 0, "u1_migrated": 0,
                         "u1_not_migrated": 0, "u1_wip": 0,
                         "u2_total": 0, "u2_picked": 0},
@@ -134,30 +139,44 @@ ATTRIBUTION_OVERRIDE = {
 
 
 def _u1_for(p, u1_by):
+    """U1 metrics for a partner. ATTRIBUTION_OVERRIDE may pin per-field values;
+    any field set to "auto" falls back to the live sheet aggregate."""
     code = str(p.get("partner_code") or "")
-    if code in ATTRIBUTION_OVERRIDE:
-        ov = ATTRIBUTION_OVERRIDE[code]
-        return {"total": ov["u1_total"],
-                "migrated": ov["u1_migrated"],
-                "not_migrated": ov.get("u1_not_migrated", 0),
-                "wip": ov.get("u1_wip", 0)}
     key = p["name"].lower()
-    return u1_by.get(key, {"total": 0, "migrated": 0,
-                           "not_migrated": 0, "wip": 0})
+    sheet_val = u1_by.get(key, {"total": 0, "migrated": 0,
+                                 "not_migrated": 0, "wip": 0})
+    if code not in ATTRIBUTION_OVERRIDE:
+        return sheet_val
+    ov = ATTRIBUTION_OVERRIDE[code]
+    def pick(field, ov_field):
+        v = ov.get(ov_field, 0)
+        return sheet_val.get(field, 0) if v == "auto" else v
+    return {"total": pick("total", "u1_total"),
+            "migrated": pick("migrated", "u1_migrated"),
+            "not_migrated": pick("not_migrated", "u1_not_migrated"),
+            "wip": pick("wip", "u1_wip")}
 
 
 def _u2_total_for(p, u2_total):
     code = str(p.get("partner_code") or "")
+    key = p["name"].lower()
     if code in ATTRIBUTION_OVERRIDE:
-        return ATTRIBUTION_OVERRIDE[code]["u2_total"]
-    return u2_total.get(p["name"].lower(), 0)
+        v = ATTRIBUTION_OVERRIDE[code]["u2_total"]
+        if v == "auto":
+            return u2_total.get(key, 0)
+        return v
+    return u2_total.get(key, 0)
 
 
 def _u2_picked_for(p, u2_picked):
     code = str(p.get("partner_code") or "")
+    key = p["name"].lower()
     if code in ATTRIBUTION_OVERRIDE:
-        return ATTRIBUTION_OVERRIDE[code]["u2_picked"]
-    return u2_picked.get(p["name"].lower(), 0)
+        v = ATTRIBUTION_OVERRIDE[code]["u2_picked"]
+        if v == "auto":
+            return u2_picked.get(key, 0)
+        return v
+    return u2_picked.get(key, 0)
 
 
 _TOKEN_SALT = "csp-exit-wiom-dashboard-2026"
@@ -852,9 +871,19 @@ def build_sheet_lookups(u1_rows, u2_rows):
         key = name.lower()
         key = SHEET_NAME_ALIAS.get(key, name).lower() if key in SHEET_NAME_ALIAS else key
         u2_total[key] += 1
-        if str(r.get("Remarks Dropdown") or "").strip().lower() == "device picked up":
+        if _u2_row_is_picked(r):
             u2_picked[key] += 1
     return u1_by, u2_total, u2_picked
+
+
+def _u2_row_is_picked(row):
+    """A U2 customer counts as 'device picked' if EITHER column says so:
+      - Remarks Dropdown == 'Device picked up', OR
+      - Device Picked (Ajinkya/Pradeep) == 'Yes'
+    Case-insensitive on both. If both are filled, still one customer (one row)."""
+    remark = str(row.get("Remarks Dropdown") or "").strip().lower()
+    pradeep = str(row.get("Device Picked (Ajinkya/Pradeep)") or "").strip().lower()
+    return remark == "device picked up" or pradeep == "yes"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1863,7 +1892,7 @@ def render():
             mobile = r.get("Mobile no") or r.get("Mobile")
             if not partner or not mobile: continue
             if partner.lower() not in s5_all_lower: continue
-            if str(r.get("Remarks Dropdown") or "").strip().lower() == "device picked up": continue
+            if _u2_row_is_picked(r): continue   # already picked via either column
             pending_pairs.append((str(mobile).strip(), partner))
 
         # Get NAS_ID per mobile + IDLE NAS sets per partner (keyed by partner_code)
