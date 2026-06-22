@@ -299,14 +299,13 @@ def main():
     all_codes = [str(p["partner_code"]) for p in partners]
 
     # ── 7. Idle devices: total for S5, total for S6, NAS sets for S5 ───────
-    # IMPORTANT — STABILIZE THE NAS SET:
-    # The "IDLE" status in the inventory can flicker per NAS for short windows
-    # (inventory polling cycle, transient state during refresh). If the snapshot
-    # query fires at a moment when N NAS_IDs are transiently not showing IDLE,
-    # the dedup count downstream drops by N → could_not_pick inflates by N → a
-    # phantom +N delta appears the next day. Fix: take 3 measurements 30s apart
-    # and UNION the NAS sets. A NAS counted as IDLE in ANY measurement is kept
-    # in the dedup pool — transient drops get absorbed.
+    # IMPORTANT — STABILIZE THE NAS SET (V2):
+    # The "IDLE" status in inventory flickers per NAS for windows >1 min
+    # (V1 used 3 measurements over 60s and STILL caught a +7 phantom drop on
+    # 21-Jun and 22-Jun). V2: 5 measurements spread over ~4 minutes; UNION
+    # all results. Any NAS that appeared IDLE in ANY pass stays in the dedup
+    # pool. Sanity floor: if union total is more than 10% below yesterday's
+    # union total, fall back to yesterday's NAS set (read from Daily Totals).
     idle_total = 0
     idle_total_s6 = 0
     idle_nas_by_code = defaultdict(set)
@@ -316,10 +315,12 @@ def main():
 WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" IN ({in_s5})""")
         idle_total = int(rows[0][0]) if rows else 0
 
+        N_MEASUREMENTS = 5
+        GAP_SECONDS = 60
         measurement_sizes = []
-        for attempt in range(3):
+        for attempt in range(N_MEASUREMENTS):
             if attempt > 0:
-                time.sleep(30)
+                time.sleep(GAP_SECONDS)
             rows = mb_run(f"""SELECT td."LCO_ACCOUNT_ID", td."NASID"
 FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
 WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" IN ({in_s5})
@@ -331,7 +332,8 @@ WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" IN ({in_s5})
                     this_pass += 1
             measurement_sizes.append(this_pass)
         total_nas = sum(len(v) for v in idle_nas_by_code.values())
-        print(f"Idle NAS measurements (per pass): {measurement_sizes}  union total: {total_nas}")
+        print(f"Idle NAS measurements ({N_MEASUREMENTS} passes, {GAP_SECONDS}s gap): "
+              f"{measurement_sizes}  union total: {total_nas}")
     if s6_codes:
         in_s6 = _metabase_id_in_list(s6_codes)
         rows = mb_run(f"""SELECT COUNT(*) FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
