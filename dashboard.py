@@ -255,9 +255,35 @@ TOTALS_HEADERS = [
 ]
 
 
+def _read_records_safe(ws):
+    """Read a worksheet to list-of-dicts without tripping gspread's strict
+    header validation. gspread's get_all_records() throws on empty/duplicate
+    headers, which happens when a sheet has trailing empty columns beyond
+    the filled header row. We read row 1 ourselves, trim to the rightmost
+    non-empty header, then zip data rows to that header list."""
+    all_values = ws.get_all_values()
+    if not all_values:
+        return []
+    header_row = all_values[0]
+    # Trim trailing empty header cells
+    last_filled = 0
+    for i, h in enumerate(header_row):
+        if h and h.strip():
+            last_filled = i + 1
+    headers = [h.strip() for h in header_row[:last_filled]]
+    out = []
+    for row in all_values[1:]:
+        # Pad/truncate row to header length so zip is clean
+        padded = row[:last_filled] + [""] * max(0, last_filled - len(row))
+        out.append(dict(zip(headers, padded)))
+    return out
+
+
 @st.cache_data(ttl=300)
 def fetch_sheets(sheet_id, gcp_creds):
-    """Pull the two relevant tabs by name and return rows as list-of-dicts."""
+    """Pull the two relevant tabs by name and return rows as list-of-dicts.
+    Uses _read_records_safe to tolerate trailing empty columns in either tab
+    (otherwise gspread's get_all_records() raises 'duplicate header [empty]')."""
     creds = Credentials.from_service_account_info(
         gcp_creds,
         scopes=[
@@ -269,9 +295,9 @@ def fetch_sheets(sheet_id, gcp_creds):
     book = client.open_by_key(sheet_id)
 
     # U2 — one row per customer (device pickup tracking)
-    u2_rows = book.worksheet(U2_TAB).get_all_records()
+    u2_rows = _read_records_safe(book.worksheet(U2_TAB))
     # U1 — one row per partner (migration aggregates)
-    u1_rows = book.worksheet(U1_TAB).get_all_records()
+    u1_rows = _read_records_safe(book.worksheet(U1_TAB))
 
     return u2_rows, u1_rows
 
@@ -292,7 +318,7 @@ def fetch_netbox_collection(sheet_id, gcp_creds):
         ws = book.worksheet("S5 Netbox Collection")
     except Exception:
         return {}
-    rows = ws.get_all_records()
+    rows = _read_records_safe(ws)
     out = {}
     for r in rows:
         csp_id = str(r.get("CSP ID") or "").strip()
@@ -1105,7 +1131,7 @@ def read_yesterday_totals(book):
     except Exception:
         return {}
     try:
-        rows = ws.get_all_records()
+        rows = _read_records_safe(ws)
     except Exception:
         return {}
     today = datetime.now(IST).strftime("%Y-%m-%d")

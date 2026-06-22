@@ -128,6 +128,26 @@ def _u2_picked_for(p, u2_picked):
     return u2_picked.get(key, 0)
 
 
+def _read_records_safe(ws):
+    """Read a worksheet to list-of-dicts without tripping gspread's strict
+    header validation. Trims trailing empty header columns so empty extras
+    don't get flagged as 'duplicate header'. Mirror of dashboard.py helper."""
+    all_values = ws.get_all_values()
+    if not all_values:
+        return []
+    header_row = all_values[0]
+    last_filled = 0
+    for i, h in enumerate(header_row):
+        if h and h.strip():
+            last_filled = i + 1
+    headers = [h.strip() for h in header_row[:last_filled]]
+    out = []
+    for row in all_values[1:]:
+        padded = row[:last_filled] + [""] * max(0, last_filled - len(row))
+        out.append(dict(zip(headers, padded)))
+    return out
+
+
 def _to_int(v):
     try:
         return int(str(v).replace(",", "").strip() or 0)
@@ -234,8 +254,10 @@ def main():
     print(f"Partners fetched: {len(partners)}")
 
     # ── 4. Google Sheet: U1 (Migration Data) + U2 (Main sheet) ─────────────
-    u2_rows = book.worksheet(U2_TAB).get_all_records()
-    u1_rows = book.worksheet(U1_TAB).get_all_records()
+    # _read_records_safe tolerates trailing empty columns (otherwise gspread's
+    # get_all_records() raises "duplicate header: ['']" when col_count > filled headers).
+    u2_rows = _read_records_safe(book.worksheet(U2_TAB))
+    u1_rows = _read_records_safe(book.worksheet(U1_TAB))
 
     u1_by = {}
     for row in u1_rows:
@@ -410,7 +432,7 @@ WHERE MOBILE IN ({m_in})""")
     # ── 10. Netbox Collection (S5 Netbox Collection tab) ───────────────────
     netbox_collected_by_code = defaultdict(int)
     try:
-        nc_rows = book.worksheet(NETBOX_COLLECTION_TAB).get_all_records()
+        nc_rows = _read_records_safe(book.worksheet(NETBOX_COLLECTION_TAB))
         for row in nc_rows:
             code = str(row.get("CSP ID") or "").strip()
             if not code:
