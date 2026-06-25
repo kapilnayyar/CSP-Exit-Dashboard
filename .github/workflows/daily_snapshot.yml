@@ -1,12 +1,14 @@
-name: Daily Snapshot (23:55 IST)
+name: Daily Snapshot (23:30 IST)
 
-# Runs every day at 23:55 IST = 18:25 UTC.
-# Captures the day's CLOSING totals (5 min before midnight) and labels the row
-# with TOMORROW's date so the next-day dashboard reads it as D-1 = yesterday's
-# close-of-business.
+# Runs every day at 23:30 IST = 18:00 UTC.
+# Moved earlier from 23:55 -> 23:30 on 2026-06-25 because a recurring "+7 phantom
+# dedup drop" was hitting the cron 5 days in a row. The flicker pattern suggests
+# a midnight inventory refresh job was overlapping the 23:55 window. Earlier slot
+# avoids that overlap. The sanity floor in capture_daily_snapshot.py is the
+# backstop if it still happens.
 on:
   schedule:
-    - cron: "25 18 * * *"
+    - cron: "0 18 * * *"
   workflow_dispatch:  # also allow manual trigger from GitHub UI
 
 jobs:

@@ -509,6 +509,35 @@ WHERE MOBILE IN ({m_in})""")
     raw_cnp = (s5_u1_total - s5_u1_mig) + (s5_u2_total - s5_u2_picked)
     s5_could_not_pick = max(raw_cnp - s5_dup, 0)
     s5_liability = idle_total + s5_could_not_pick
+
+    # ── SANITY FLOOR: catch recurring phantom dedup drop ──────────────────
+    # Despite V2 stabilization (5 measurements over 4 min), the cron has
+    # captured a +7 inflated s5_could_not_pick on 5 consecutive days
+    # (18-Jun, 20-Jun, 21-Jun, 22-Jun, 24-Jun). Kapil has been manually
+    # correcting the row every morning. This floor stops that loop:
+    # if today's measured cnp is meaningfully higher than yesterday's
+    # stored cnp AND idle_total hasn't shifted, the difference is almost
+    # certainly the dedup flicker — substitute yesterday's value.
+    try:
+        target_dt = datetime.strptime(today_str, "%Y-%m-%d").date()
+        yest_dt = (target_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+        prior_rows = _read_records_safe(ws_totals)
+        prior = next((r for r in prior_rows if str(r.get("date")) == yest_dt), None)
+        if prior:
+            yest_cnp = int(float(prior.get("s5_could_not_pick") or 0))
+            yest_idle = int(float(prior.get("s5_idle") or 0))
+            if (yest_cnp > 0
+                    and s5_could_not_pick > yest_cnp + 5
+                    and abs(idle_total - yest_idle) <= 5):
+                print(f"SANITY FLOOR triggered for s5_could_not_pick: "
+                      f"measured={s5_could_not_pick}, yesterday={yest_cnp}, "
+                      f"idle stable ({idle_total} vs {yest_idle}). "
+                      f"Using yesterday's value to filter phantom dedup drop.")
+                s5_could_not_pick = yest_cnp
+                s5_liability = idle_total + s5_could_not_pick
+    except Exception as e:
+        print(f"Sanity floor check skipped (will not block snapshot): {e}")
+
     s5_collected = sum(
         netbox_collected_by_code.get(str(p.get("partner_code") or ""), 0)
         for p in s5_partners)
