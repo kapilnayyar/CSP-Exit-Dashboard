@@ -331,11 +331,21 @@ def main():
     idle_total = 0
     idle_total_s6 = 0
     idle_nas_by_code = defaultdict(set)
+    idle_count_by_code = {}   # per-CSP IDLE counts — written to "S5 Daily IDLE by CSP" tab
     if s5_codes:
         in_s5 = _metabase_id_in_list(s5_codes)
         rows = mb_run(f"""SELECT COUNT(*) FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
 WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" IN ({in_s5})""")
         idle_total = int(rows[0][0]) if rows else 0
+
+        # Per-CSP IDLE count (one extra cheap query, written to its own tab below
+        # so we can diff CSP-level day-over-day and explain aggregate IDLE swings)
+        rows = mb_run(f"""SELECT td."LCO_ACCOUNT_ID", COUNT(*)
+FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
+WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" IN ({in_s5})
+GROUP BY 1""")
+        for code, n in rows:
+            idle_count_by_code[str(code)] = int(n)
 
         N_MEASUREMENTS = 5
         GAP_SECONDS = 60
@@ -569,6 +579,35 @@ WHERE MOBILE IN ({m_in})""")
     row = [today_str] + [int(totals.get(k, 0) or 0) for k in TOTALS_HEADERS[1:]]
     ws_totals.append_row(row, value_input_option="USER_ENTERED")
     print(f"Wrote row for {today_str}: {row}")
+
+    # ── 13. Per-CSP IDLE snapshot ─────────────────────────────────────────
+    # Writes one row per S5 partner per day to "S5 Daily IDLE by CSP" tab.
+    # Lets us diff CSP-level day-over-day to explain aggregate IDLE swings
+    # (e.g., the 37-device drop on 27-Jun where 21 turned out to be
+    # LCO_ACCOUNT_ID reassignments to non-S5 partners).
+    IDLE_TAB = "S5 Daily IDLE by CSP"
+    IDLE_HEADERS = ["Date", "Partner Code", "Partner Name", "IDLE Count"]
+    try:
+        ws_idle = book.worksheet(IDLE_TAB)
+    except gspread.WorksheetNotFound:
+        ws_idle = book.add_worksheet(title=IDLE_TAB, rows=50000, cols=len(IDLE_HEADERS))
+        ws_idle.append_row(IDLE_HEADERS)
+        print(f"Created '{IDLE_TAB}' tab.")
+
+    # Skip if today's per-CSP rows already exist (idempotent)
+    existing_keys = {f"{r[0]}|{r[1]}" for r in ws_idle.get_all_values()[1:] if len(r) >= 2}
+    code_to_name_local = {str(p["partner_code"]): p["name"] for p in s5_partners}
+    new_rows = []
+    for code, name in code_to_name_local.items():
+        if f"{today_str}|{code}" in existing_keys:
+            continue
+        n = int(idle_count_by_code.get(code, 0))
+        new_rows.append([today_str, code, name, n])
+    if new_rows:
+        ws_idle.append_rows(new_rows, value_input_option="USER_ENTERED")
+        print(f"Wrote {len(new_rows)} per-CSP IDLE rows for {today_str}.")
+    else:
+        print(f"Per-CSP IDLE rows for {today_str} already present — skipped.")
 
 
 if __name__ == "__main__":
