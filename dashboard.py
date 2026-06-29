@@ -252,6 +252,8 @@ TOTALS_HEADERS = [
     "s4b_csps", "s4b_u1", "s4b_u1_mig", "s4b_u2", "s4b_u2_pick", "s4b_pending",
     "s5_csps", "s5_idle", "s5_could_not_pick", "s5_liability", "s5_collected",
     "s6_csps", "s6_idle", "s6_collected",
+    # Added 2026-06-29 to power the dedup-based sanity floor:
+    "s5_cnp_raw", "s5_dedup",
 ]
 
 

@@ -41,6 +41,8 @@ TOTALS_HEADERS = [
     "s4b_csps", "s4b_u1", "s4b_u1_mig", "s4b_u2", "s4b_u2_pick", "s4b_pending",
     "s5_csps", "s5_idle", "s5_could_not_pick", "s5_liability", "s5_collected",
     "s6_csps", "s6_idle", "s6_collected",
+    # Added 2026-06-29 to power the dedup-based sanity floor:
+    "s5_cnp_raw", "s5_dedup",
 ]
 
 # Same as dashboard.py — keep in sync
@@ -520,29 +522,45 @@ WHERE MOBILE IN ({m_in})""")
     s5_could_not_pick = max(raw_cnp - s5_dup, 0)
     s5_liability = idle_total + s5_could_not_pick
 
-    # ── SANITY FLOOR: catch recurring phantom dedup drop ──────────────────
-    # Despite V2 stabilization (5 measurements over 4 min), the cron has
-    # captured a +7 inflated s5_could_not_pick on 5 consecutive days
-    # (18-Jun, 20-Jun, 21-Jun, 22-Jun, 24-Jun). Kapil has been manually
-    # correcting the row every morning. This floor stops that loop:
-    # if today's measured cnp is meaningfully higher than yesterday's
-    # stored cnp AND idle_total hasn't shifted, the difference is almost
-    # certainly the dedup flicker — substitute yesterday's value.
+    # ── SANITY FLOOR v3 (2026-06-29) — dedup-based ───────────────────────
+    # v2 floor required idle to be stable (delta <=5). That guard failed on
+    # 28-Jun when idle legitimately dropped by 37 devices (CSPs returned
+    # them) — the floor stepped back and the phantom +7 dedup drop slipped
+    # through, requiring another manual correction.
+    #
+    # v3 fix: store dedup itself in Daily Totals, then check yesterday's
+    # stored dedup directly. If today's measured dedup is meaningfully
+    # lower than yesterday's stored dedup AND raw_cnp (sheet-driven, not
+    # subject to flicker) hasn't moved much, substitute yesterday's dedup.
+    # Completely independent of idle changes.
     try:
         target_dt = datetime.strptime(today_str, "%Y-%m-%d").date()
         yest_dt = (target_dt - timedelta(days=1)).strftime("%Y-%m-%d")
         prior_rows = _read_records_safe(ws_totals)
         prior = next((r for r in prior_rows if str(r.get("date")) == yest_dt), None)
         if prior:
+            yest_dedup = int(float(prior.get("s5_dedup") or 0))
+            yest_cnp_raw = int(float(prior.get("s5_cnp_raw") or 0))
             yest_cnp = int(float(prior.get("s5_could_not_pick") or 0))
-            yest_idle = int(float(prior.get("s5_idle") or 0))
-            if (yest_cnp > 0
-                    and s5_could_not_pick > yest_cnp + 5
-                    and abs(idle_total - yest_idle) <= 5):
-                print(f"SANITY FLOOR triggered for s5_could_not_pick: "
-                      f"measured={s5_could_not_pick}, yesterday={yest_cnp}, "
-                      f"idle stable ({idle_total} vs {yest_idle}). "
-                      f"Using yesterday's value to filter phantom dedup drop.")
+            # Prefer dedup-based floor when yesterday's dedup is on file.
+            if yest_dedup > 0 and yest_cnp_raw > 0:
+                if (s5_dup < yest_dedup - 2
+                        and abs(raw_cnp - yest_cnp_raw) <= 5):
+                    print(f"SANITY FLOOR v3 triggered (dedup-based): "
+                          f"measured dedup={s5_dup}, yesterday dedup={yest_dedup}, "
+                          f"raw_cnp stable ({raw_cnp} vs {yest_cnp_raw}). "
+                          f"Using yesterday's dedup to filter phantom flicker.")
+                    s5_dup = yest_dedup
+                    s5_could_not_pick = max(raw_cnp - s5_dup, 0)
+                    s5_liability = idle_total + s5_could_not_pick
+            # Fallback: if yesterday's dedup is not on file (first runs
+            # after this deploy), use the old cnp-based check WITHOUT the
+            # idle-stable guard so phantom on a real-idle-shift day still
+            # gets caught.
+            elif yest_cnp > 0 and s5_could_not_pick > yest_cnp + 5:
+                print(f"SANITY FLOOR v3 triggered (fallback): "
+                      f"measured cnp={s5_could_not_pick}, yesterday cnp={yest_cnp}. "
+                      f"Using yesterday's cnp.")
                 s5_could_not_pick = yest_cnp
                 s5_liability = idle_total + s5_could_not_pick
     except Exception as e:
@@ -573,12 +591,34 @@ WHERE MOBILE IN ({m_in})""")
         "s5_collected": s5_collected,
         "s6_csps": len(s6_partners), "s6_idle": idle_total_s6,
         "s6_collected": s6_collected,
+        # v3 sanity-floor inputs
+        "s5_cnp_raw": raw_cnp,
+        "s5_dedup": s5_dup,
     }
 
     # ── 12. Append row ──────────────────────────────────────────────────────
-    row = [today_str] + [int(totals.get(k, 0) or 0) for k in TOTALS_HEADERS[1:]]
+    # Make sure the sheet header row has every column we are about to write.
+    # Auto-extend if TOTALS_HEADERS has grown since the sheet was created.
+    current_header = ws_totals.row_values(1)
+    if current_header != TOTALS_HEADERS:
+        missing = [h for h in TOTALS_HEADERS if h not in current_header]
+        if missing:
+            print(f"Daily Totals header missing {missing} — extending sheet header.")
+            # Build the new header preserving existing column positions, then
+            # appending the missing ones to the end.
+            new_header = list(current_header) + missing
+            # Resize sheet if needed
+            if ws_totals.col_count < len(new_header):
+                ws_totals.add_cols(len(new_header) - ws_totals.col_count)
+            ws_totals.update("A1", [new_header], value_input_option="USER_ENTERED")
+            current_header = new_header
+
+    # Build the row in the SHEET's column order (not TOTALS_HEADERS'),
+    # so older columns stay where they were and new columns land at the end.
+    row = [today_str if k == "date" else int(totals.get(k, 0) or 0)
+           for k in current_header]
     ws_totals.append_row(row, value_input_option="USER_ENTERED")
-    print(f"Wrote row for {today_str}: {row}")
+    print(f"Wrote row for {today_str}: cnp_raw={raw_cnp}, dedup={s5_dup}, cnp={s5_could_not_pick}")
 
     # ── 13. Per-CSP IDLE snapshot ─────────────────────────────────────────
     # Writes one row per S5 partner per day to "S5 Daily IDLE by CSP" tab.
