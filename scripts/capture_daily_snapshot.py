@@ -69,7 +69,7 @@ ATTRIBUTION_OVERRIDE = {
     # "auto" sentinel = use the live sheet aggregate for that field.
     # Pattern: one collision-owner uses "auto" so it auto-syncs; the others
     # are forced to 0 to avoid double-counting.
-    "274877952814":    {"u1_total": 7, "u1_migrated": 7,
+    "274877952814":    {"u1_total": 8, "u1_migrated": 8,
                         "u1_not_migrated": 0, "u1_wip": 0,
                         "u2_total": "auto", "u2_picked": "auto"},
     "281749855023736": {"u1_total": 2, "u1_migrated": 0,

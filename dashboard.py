@@ -113,7 +113,7 @@ ATTRIBUTION_OVERRIDE = {
     # (Total U1=7 for the S4 B2 partner, Total U1=2 for the S5). They CAN'T
     # be split by sheet lookup → U1 stays hardcoded. U2 has all sheet rows
     # belonging to the S4 B2 partner — safe to auto-sync.
-    "274877952814":    {"u1_total": 7, "u1_migrated": 7,
+    "274877952814":    {"u1_total": 8, "u1_migrated": 8,
                         "u1_not_migrated": 0, "u1_wip": 0,
                         "u2_total": "auto", "u2_picked": "auto"},
     "281749855023736": {"u1_total": 2, "u1_migrated": 0,
