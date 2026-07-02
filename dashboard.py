@@ -243,6 +243,13 @@ def get_secrets():
 U2_TAB = "Main sheet"
 U1_TAB = "Migration Data"
 TOTALS_TAB = "Daily Totals"
+
+# PX/CX Migration Summary workbook — used for U1 dedup mobiles.
+# Kapil confirmed 2026-07-02: apply the same U1 dedup logic that the summary
+# script does; the row-level tabs live in this separate workbook.
+PX_MIGRATION_WORKBOOK_ID = "1hmT50leXZUAibzd2zzfO4FVj-B3m675CCFUbdwFuVS4"
+PX_RAW_TAB = "PX Migration Raw Data"
+PX_MIGRATED_TAB = "PX Migrated Cases"
 TOTALS_HEADERS = [
     "date",
     "s1_csps", "s1_userbase", "s1_voluntary", "s1_b1", "s1_b2",
@@ -331,6 +338,71 @@ def fetch_netbox_collection(sheet_id, gcp_creds):
         except (TypeError, ValueError):
             out[csp_id] = 0
     return out
+
+
+@st.cache_data(ttl=300)
+def fetch_px_migration(gcp_creds):
+    """Read PX/CX Migration Summary workbook tabs used for U1 dedup.
+    Returns:
+      u1_raw_by_code: {partner_code_str: set(mobile_str)} — every U1 customer of an exiting CSP
+      u1_migrated_by_code_and_name: raw list [(old_partner_name_lower, mobile_str)] — used by caller to attribute via SHEET_NAME_ALIAS + name_to_code
+    """
+    creds = Credentials.from_service_account_info(
+        gcp_creds,
+        scopes=["https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive.readonly"],
+    )
+    client = gspread.authorize(creds)
+    try:
+        book = client.open_by_key(PX_MIGRATION_WORKBOOK_ID)
+    except Exception:
+        return {}, []
+    # Raw Data — keyed by exit_partner_code
+    u1_raw_by_code = defaultdict(set)
+    try:
+        raw = book.worksheet(PX_RAW_TAB).get_all_values()
+        if raw:
+            hdr = raw[0]
+            try:
+                c_code = hdr.index("exit_partner_code")
+                c_mob = hdr.index("Customer_mobile")
+            except ValueError:
+                c_code = c_mob = None
+            if c_code is not None and c_mob is not None:
+                for r in raw[1:]:
+                    if len(r) <= max(c_code, c_mob):
+                        continue
+                    code = str(r[c_code]).strip()
+                    mobile = str(r[c_mob]).strip()
+                    if code and mobile:
+                        u1_raw_by_code[code].add(mobile)
+    except Exception:
+        pass
+    # Migrated Cases — return raw list; caller applies alias + name→code
+    migrated_rows = []
+    try:
+        mig = book.worksheet(PX_MIGRATED_TAB).get_all_values()
+        if mig:
+            hdr = mig[0]
+            # Locate mobile + Old Partner Name columns dynamically
+            c_mob_m = c_name_m = None
+            for i, h in enumerate(hdr):
+                hl = str(h).strip().lower()
+                if c_mob_m is None and "mobile" in hl:
+                    c_mob_m = i
+                if c_name_m is None and ("old partner" in hl or "exit partner" in hl):
+                    c_name_m = i
+            if c_mob_m is not None and c_name_m is not None:
+                for r in mig[1:]:
+                    if len(r) <= max(c_mob_m, c_name_m):
+                        continue
+                    nm = str(r[c_name_m]).strip().lower()
+                    mobile = str(r[c_mob_m]).strip()
+                    if nm and mobile:
+                        migrated_rows.append((nm, mobile))
+    except Exception:
+        pass
+    return dict(u1_raw_by_code), migrated_rows
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1910,20 +1982,41 @@ def render():
         secrets["metabase_url"], secrets["metabase_key"], all_codes,
     ) if secrets.get("metabase_key") else {}
 
-    # ── S5 dedup: U2 pending customers whose netbox is already IDLE at CSP ───
+    # ── S5 dedup: U2 pending AND U1 pending customers whose NAS is already IDLE ─
+    # Extended 2026-07-02 to also cover U1 pending customers (per Kapil).
+    # U1 pending mobiles come from PX/CX Migration Summary workbook:
+    #   raw_data (all U1 customers of exiting CSPs)  MINUS  migrated_cases
     s5_dedup = {"duplicates": 0}
     if s5_all_codes and secrets["metabase_key"]:
-        # U2 pending mobiles (per partner) from Main sheet
-        pending_pairs = []  # (mobile, partner_name)
+        # --- U2 pending pairs (unchanged) -----------------------------------
+        pending_pairs = []  # (mobile, partner_code_str)
         for r in u2_rows:
             partner = str(r.get("Partner") or "").strip()
             mobile = r.get("Mobile no") or r.get("Mobile")
             if not partner or not mobile: continue
             if partner.lower() not in s5_all_lower: continue
-            if _u2_row_is_picked(r): continue   # already picked via either column
-            pending_pairs.append((str(mobile).strip(), partner))
+            if _u2_row_is_picked(r): continue
+            code = name_to_code.get(partner)
+            if not code: continue
+            pending_pairs.append((str(mobile).strip(), str(code)))
 
-        # Get NAS_ID per mobile + IDLE NAS sets per partner (keyed by partner_code)
+        # --- U1 pending pairs from PX/CX Migration Summary workbook ---------
+        u1_raw_by_code, u1_migrated_rows = fetch_px_migration(secrets["gcp_creds"])
+        # Resolve migrated rows to partner_code via alias + name→code map
+        u1_migrated_by_code = defaultdict(set)
+        for nm_lc, mobile in u1_migrated_rows:
+            key = SHEET_NAME_ALIAS.get(nm_lc, nm_lc).lower()
+            code = name_to_code.get(key) or name_to_code.get(nm_lc)
+            if code:
+                u1_migrated_by_code[str(code)].add(mobile)
+        s5_codes_set = {str(c) for c in s5_all_codes}
+        for code, raw_mobiles in u1_raw_by_code.items():
+            if code not in s5_codes_set: continue
+            pending_u1 = raw_mobiles - u1_migrated_by_code.get(code, set())
+            for m in pending_u1:
+                pending_pairs.append((m, code))
+
+        # --- Lookup NAS + IDLE sets, count duplicates ----------------------
         all_mobiles = list({m for m, _ in pending_pairs})
         mobile_to_nas = fetch_mobile_to_nas(
             secrets["metabase_url"], secrets["metabase_key"], all_mobiles,
@@ -1931,14 +2024,11 @@ def render():
         idle_nas_by_code = fetch_idle_nas_by_code(
             secrets["metabase_url"], secrets["metabase_key"], s5_all_codes,
         )
-
-        # Count duplicates: pending customer's NAS_ID is in IDLE set at their partner
         dup = 0
-        for mobile, partner in pending_pairs:
+        for mobile, code in pending_pairs:
             nas = mobile_to_nas.get(mobile)
-            code = name_to_code.get(partner)
-            if not nas or not code: continue
-            if nas in idle_nas_by_code.get(str(code), set()):
+            if not nas: continue
+            if nas in idle_nas_by_code.get(code, set()):
                 dup += 1
         s5_dedup["duplicates"] = dup
 

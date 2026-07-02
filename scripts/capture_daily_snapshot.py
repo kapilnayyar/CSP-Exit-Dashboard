@@ -32,6 +32,13 @@ U1_TAB = "Migration Data"
 NETBOX_COLLECTION_TAB = "S5 Netbox Collection"
 TOTALS_TAB = "Daily Totals"
 
+# PX/CX Migration Summary workbook — row-level U1 tabs for U1 dedup.
+# Added 2026-07-02 to mirror dashboard.py; keeps snapshot in sync with the
+# extended dedup that now covers both U1 and U2 pending customers.
+PX_MIGRATION_WORKBOOK_ID = "1hmT50leXZUAibzd2zzfO4FVj-B3m675CCFUbdwFuVS4"
+PX_RAW_TAB = "PX Migration Raw Data"
+PX_MIGRATED_TAB = "PX Migrated Cases"
+
 TOTALS_HEADERS = [
     "date",
     "s1_csps", "s1_userbase", "s1_voluntary", "s1_b1", "s1_b2",
@@ -416,9 +423,68 @@ GROUP BY 1"""
         s5_partner_keys.add(n)
         s5_name_to_code[n] = str(p["partner_code"])
 
+    # ── U1 pending mobiles from PX/CX Migration Summary workbook ───────────
+    # Added 2026-07-02: apply the same NAS-vs-IDLE dedup we do for U2 to U1
+    # customers as well. Pending U1 = every raw-data row that is NOT in the
+    # migrated-cases tab, per exit_partner_code.
+    u1_pending_mobiles_by_code = defaultdict(set)
+    try:
+        px_book = client.open_by_key(PX_MIGRATION_WORKBOOK_ID)
+        # Raw Data - all U1 customers of exiting CSPs, keyed by exit_partner_code
+        u1_raw_by_code = defaultdict(set)
+        raw = px_book.worksheet(PX_RAW_TAB).get_all_values()
+        if raw:
+            h = raw[0]
+            try:
+                c_code = h.index("exit_partner_code")
+                c_mob = h.index("Customer_mobile")
+            except ValueError:
+                c_code = c_mob = None
+            if c_code is not None and c_mob is not None:
+                for r in raw[1:]:
+                    if len(r) <= max(c_code, c_mob):
+                        continue
+                    code = str(r[c_code]).strip()
+                    mobile = str(r[c_mob]).strip()
+                    if code and mobile:
+                        u1_raw_by_code[code].add(mobile)
+        # Migrated Cases - keyed by Old Partner Name -> resolve to code
+        u1_mig_by_code = defaultdict(set)
+        mig = px_book.worksheet(PX_MIGRATED_TAB).get_all_values()
+        if mig:
+            h = mig[0]
+            c_mob_m = c_name_m = None
+            for i, hh in enumerate(h):
+                hl = str(hh).strip().lower()
+                if c_mob_m is None and "mobile" in hl:
+                    c_mob_m = i
+                if c_name_m is None and ("old partner" in hl or "exit partner" in hl):
+                    c_name_m = i
+            if c_mob_m is not None and c_name_m is not None:
+                for r in mig[1:]:
+                    if len(r) <= max(c_mob_m, c_name_m):
+                        continue
+                    nm = str(r[c_name_m]).strip().lower()
+                    if nm in SHEET_NAME_ALIAS:
+                        nm = SHEET_NAME_ALIAS[nm].lower()
+                    mobile = str(r[c_mob_m]).strip()
+                    if nm and mobile:
+                        code = s5_name_to_code.get(nm)
+                        if code:
+                            u1_mig_by_code[code].add(mobile)
+        # Pending = raw - migrated per code, only for S5 partners
+        for code, raw_set in u1_raw_by_code.items():
+            if code in {s5_name_to_code[k] for k in s5_partner_keys}:
+                u1_pending_mobiles_by_code[code] = raw_set - u1_mig_by_code.get(code, set())
+    except Exception as e:
+        print(f"PX workbook read failed (U1 dedup disabled): {e}")
+
+    # Pool ALL pending mobiles (U2 by partner name + U1 by partner code)
     all_pending_mobiles = []
     for key in s5_partner_keys:
         all_pending_mobiles.extend(u2_pending_by_name.get(key, []))
+    for code, mobs in u1_pending_mobiles_by_code.items():
+        all_pending_mobiles.extend(mobs)
     all_pending_mobiles = list(set(all_pending_mobiles))
 
     mobile_to_nas = {}
@@ -432,6 +498,7 @@ WHERE MOBILE IN ({m_in})""")
                     mobile_to_nas[str(mobile)] = str(nas)
 
     s5_dup = 0
+    # U2 dedup pass (existing behavior)
     for key in s5_partner_keys:
         partner_code = s5_name_to_code.get(key)
         idle_nas = idle_nas_by_code.get(partner_code, set()) if partner_code else set()
@@ -439,7 +506,14 @@ WHERE MOBILE IN ({m_in})""")
             nas = mobile_to_nas.get(mobile)
             if nas and nas in idle_nas:
                 s5_dup += 1
-    print(f"S5 dedup count: {s5_dup}")
+    # U1 dedup pass (new)
+    for code, mobs in u1_pending_mobiles_by_code.items():
+        idle_nas = idle_nas_by_code.get(code, set())
+        for mobile in mobs:
+            nas = mobile_to_nas.get(mobile)
+            if nas and nas in idle_nas:
+                s5_dup += 1
+    print(f"S5 dedup count (U1 + U2): {s5_dup}")
 
     # ── 10. Netbox Collection (S5 Netbox Collection tab) ───────────────────
     netbox_collected_by_code = defaultdict(int)
