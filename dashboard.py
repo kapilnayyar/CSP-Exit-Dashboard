@@ -1221,6 +1221,34 @@ def read_yesterday_totals(book):
     return {}
 
 
+def compute_s5_freshness(book):
+    """Return (hours_since_latest_cron_row, status_word) where status_word is
+    one of 'nominal', 'stale_24h', or 'stale_48h'. Uses the newest 'date'
+    column value in Daily Totals as the reference point. If no rows or read
+    fails, returns None."""
+    try:
+        ws = book.worksheet(TOTALS_TAB)
+        dates = ws.col_values(1)[1:]  # skip header
+    except Exception:
+        return None
+    parsed = []
+    for d in dates:
+        try:
+            parsed.append(datetime.strptime(d.strip(), "%Y-%m-%d"))
+        except Exception:
+            pass
+    if not parsed:
+        return None
+    latest = max(parsed).replace(tzinfo=IST)
+    now = datetime.now(IST)
+    hours = (now - latest).total_seconds() / 3600
+    if hours <= 24:
+        return (hours, "nominal")
+    if hours <= 48:
+        return (hours, "stale_24h")
+    return (hours, "stale_48h")
+
+
 def _delta_str(d0, dm1):
     """Format the Delta column. Show '—' if D-1 is missing/None."""
     if dm1 is None:
@@ -1314,7 +1342,7 @@ def stage_card_with_delta(stage_label, color, rows):
     return html
 
 
-def render_tab5_funnel_with_delta(m, y):
+def render_tab5_funnel_with_delta(m, y, s5_freshness=None):
     """Tab 5 — same 7 stages as Tab 2, with D0 / D-1 / Delta columns.
     m = today_metrics dict; y = yesterday_totals dict (empty if missing)."""
 
@@ -1462,6 +1490,23 @@ def render_tab5_funnel_with_delta(m, y):
             ("Total Netbox Collected from CSP", m['s5_collected'], fmt_pct(m['s5_collected'], m['s5_liability']), yd("s5_collected")),
         ]
     ), unsafe_allow_html=True)
+    # Freshness caption — cron is the S5 source of truth (2026-07-03).
+    if s5_freshness:
+        _hours, _status = s5_freshness
+        if _status == "nominal":
+            st.caption(
+                f"S5 numbers from cron snapshot ~{_hours:.1f}h ago — nominal."
+            )
+        elif _status == "stale_24h":
+            st.warning(
+                f"S5 numbers stale — cron last ran {_hours:.1f}h ago (>24h). "
+                f"Investigate GH Actions run."
+            )
+        else:
+            st.error(
+                f"S5 numbers stale — cron has not run for {_hours:.1f}h. "
+                f"Numbers are old; fix the cron before trusting."
+            )
 
     # ── S6 ───────────────────────────────────────────────────────────────────
     s6_total_dev = m['s6_idle'] + m['s6_collected']
@@ -2050,6 +2095,7 @@ def render():
         idle_total, s5_dedup, netbox_collected_by_code, idle_total_s6,
     )
     yest_totals = {}
+    s5_freshness = None  # (hours_ago, status_word)
     try:
         _creds = Credentials.from_service_account_info(
             secrets["gcp_creds"],
@@ -2057,10 +2103,28 @@ def render():
                     "https://www.googleapis.com/auth/drive.readonly"],
         )
         book = gspread.authorize(_creds).open_by_key(secrets["sheet_id"])
-        write_today_totals(book, today_metrics)
+        # DO NOT write from dashboard — only cron writes S5 truth to Daily
+        # Totals. See s5_reconciliation.py + capture_daily_snapshot.py.
         yest_totals = read_yesterday_totals(book)
+        s5_freshness = compute_s5_freshness(book)
     except Exception:
         pass
+
+    # ── Cron is the S5 source of truth (2026-07-03 rewrite). ──
+    # The latest Daily Totals row (labelled with today's date, since cron
+    # writes 23:30 IST which labels next day) represents cron-computed S5
+    # metrics. Dashboard-live single-shot NAS was the root cause of every
+    # ±7 phantom drift. Now we display cron's number for every S5 field.
+    for k in ("s5_idle", "s5_could_not_pick", "s5_liability",
+              "s5_collected", "s6_idle", "s6_collected"):
+        if yest_totals.get(k) is not None:
+            today_metrics[k] = yest_totals[k]
+    if yest_totals.get("s5_dedup") is not None:
+        s5_dedup = {"duplicates": yest_totals["s5_dedup"]}
+    if yest_totals.get("s5_idle") is not None:
+        idle_total = yest_totals["s5_idle"]
+    if yest_totals.get("s6_idle") is not None:
+        idle_total_s6 = yest_totals["s6_idle"]
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Status & Cohorts", "CSP Exit Funnel", "Data Quality", "Search",

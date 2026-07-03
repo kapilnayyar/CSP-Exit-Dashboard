@@ -24,6 +24,14 @@ import gspread
 import requests
 from google.oauth2.service_account import Credentials
 
+# Import the shared S5 reconciliation module. The snapshot script lives in
+# scripts/ so we add its parent to sys.path.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_PARENT = os.path.dirname(_HERE)
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+from s5_reconciliation import compute_s5_snapshot, PX_MIGRATION_WORKBOOK_ID  # noqa: E402
+
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -243,10 +251,18 @@ def main():
         ws_totals.append_row(TOTALS_HEADERS)
         print(f"Created '{TOTALS_TAB}' tab.")
 
-    existing_dates = set(ws_totals.col_values(1)[1:])
+    # NOTE 2026-07-03: cron used to skip if today's row existed. That let
+    # stale/corrupt values persist. Now we OVERWRITE — cron is the S5 source
+    # of truth. Manual corrections are no longer needed; if a row is wrong,
+    # it will be recomputed correctly tonight.
+    existing_dates_list = ws_totals.col_values(1)[1:]
+    existing_dates = set(existing_dates_list)
+    existing_row_number = None
     if today_str in existing_dates:
-        print(f"Row for {today_str} already exists — nothing to do.")
-        return
+        # +2 to skip header row (which is row 1) and convert to 1-indexed
+        existing_row_number = existing_dates_list.index(today_str) + 2
+        print(f"Row for {today_str} already exists at row {existing_row_number} — "
+              f"will overwrite with fresh cron values.")
 
     # ── 3. Supabase: partners ──────────────────────────────────────────────
     sb_hdr = {"apikey": supabase_key,
@@ -329,58 +345,35 @@ def main():
     s6_codes = [str(p["partner_code"]) for p in s6_partners]
     all_codes = [str(p["partner_code"]) for p in partners]
 
-    # ── 7. Idle devices: total for S5, total for S6, NAS sets for S5 ───────
-    # IMPORTANT — STABILIZE THE NAS SET (V2):
-    # The "IDLE" status in inventory flickers per NAS for windows >1 min
-    # (V1 used 3 measurements over 60s and STILL caught a +7 phantom drop on
-    # 21-Jun and 22-Jun). V2: 5 measurements spread over ~4 minutes; UNION
-    # all results. Any NAS that appeared IDLE in ANY pass stays in the dedup
-    # pool. Sanity floor: if union total is more than 10% below yesterday's
-    # union total, fall back to yesterday's NAS set (read from Daily Totals).
-    idle_total = 0
-    idle_total_s6 = 0
-    idle_nas_by_code = defaultdict(set)
-    idle_count_by_code = {}   # per-CSP IDLE counts — written to "S5 Daily IDLE by CSP" tab
-    if s5_codes:
-        in_s5 = _metabase_id_in_list(s5_codes)
-        rows = mb_run(f"""SELECT COUNT(*) FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
-WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" IN ({in_s5})""")
-        idle_total = int(rows[0][0]) if rows else 0
-
-        # Per-CSP IDLE count (one extra cheap query, written to its own tab below
-        # so we can diff CSP-level day-over-day and explain aggregate IDLE swings)
-        rows = mb_run(f"""SELECT td."LCO_ACCOUNT_ID", COUNT(*)
-FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
-WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" IN ({in_s5})
-GROUP BY 1""")
-        for code, n in rows:
-            idle_count_by_code[str(code)] = int(n)
-
-        N_MEASUREMENTS = 5
-        GAP_SECONDS = 60
-        measurement_sizes = []
-        for attempt in range(N_MEASUREMENTS):
-            if attempt > 0:
-                time.sleep(GAP_SECONDS)
-            rows = mb_run(f"""SELECT td."LCO_ACCOUNT_ID", td."NASID"
-FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
-WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" IN ({in_s5})
-  AND td."NASID" IS NOT NULL""")
-            this_pass = 0
-            for code, nas in rows:
-                if nas:
-                    idle_nas_by_code[str(code)].add(str(nas))
-                    this_pass += 1
-            measurement_sizes.append(this_pass)
-        total_nas = sum(len(v) for v in idle_nas_by_code.values())
-        print(f"Idle NAS measurements ({N_MEASUREMENTS} passes, {GAP_SECONDS}s gap): "
-              f"{measurement_sizes}  union total: {total_nas}")
-    if s6_codes:
-        in_s6 = _metabase_id_in_list(s6_codes)
-        rows = mb_run(f"""SELECT COUNT(*) FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE" td
-WHERE td."STATUS" = 'IDLE' AND td."LCO_ACCOUNT_ID" IN ({in_s6})""")
-        idle_total_s6 = int(rows[0][0]) if rows else 0
-    print(f"Idle (S5): {idle_total}  Idle (S6): {idle_total_s6}")
+    # ── 7. S5 reconciliation via shared module ────────────────────────────
+    # ONE code path for cron AND dashboard. Handles idle count, 5-pass NAS
+    # stabilization, U1+U2 pending counts, dedup, cnp, liability. No sanity
+    # floor (v1-v3 propagated their own bugs). Collision resolver replaces
+    # ATTRIBUTION_OVERRIDE / SHEET_NAME_ALIAS at ingest.
+    print("Computing S5 snapshot via shared module...")
+    px_book = client.open_by_key(PX_MIGRATION_WORKBOOK_ID)
+    _s5 = compute_s5_snapshot(
+        sb_url=supabase_url,
+        sb_key=supabase_key,
+        requests_module=requests,
+        mb_query_fn=mb_run,
+        exit_book=book,
+        px_book=px_book,
+        n_nas_passes=5,
+        gap_seconds=60,
+        verbose=True,
+    )
+    idle_total = _s5["s5_idle"]
+    idle_total_s6 = _s5["s6_idle"]
+    idle_count_by_code = _s5["idle_count_by_code"]
+    idle_nas_by_code = _s5["idle_nas_by_code"]
+    s5_cnp_raw = _s5["s5_cnp_raw"]
+    s5_dup = _s5["s5_dedup"]
+    s5_could_not_pick = _s5["s5_could_not_pick"]
+    s5_liability = _s5["s5_liability"]
+    print(f"S5 result: idle={idle_total}, cnp_raw={s5_cnp_raw}, dedup={s5_dup}, "
+          f"cnp={s5_could_not_pick}, liab={s5_liability}")
+    print(f"S6 idle: {idle_total_s6}")
 
     # ── 8. R15 active by code (for S4 pending fallback) ────────────────────
     r15_by_code = {}
@@ -414,106 +407,7 @@ GROUP BY 1"""
             r15_by_code[str(row[0])] = int(row[1] or 0)
     print(f"R15 active fetched for {len(r15_by_code)} partners")
 
-    # ── 9. S5 dedup — pending U2 customer's NASID already in IDLE set ─────
-    s5_partner_keys = set()
-    s5_name_to_code = {}
-    for p in s5_partners:
-        n = p["name"].lower()
-        n = SHEET_NAME_ALIAS.get(n, p["name"]).lower() if n in SHEET_NAME_ALIAS else n
-        s5_partner_keys.add(n)
-        s5_name_to_code[n] = str(p["partner_code"])
-
-    # ── U1 pending mobiles from PX/CX Migration Summary workbook ───────────
-    # Added 2026-07-02: apply the same NAS-vs-IDLE dedup we do for U2 to U1
-    # customers as well. Pending U1 = every raw-data row that is NOT in the
-    # migrated-cases tab, per exit_partner_code.
-    u1_pending_mobiles_by_code = defaultdict(set)
-    try:
-        px_book = client.open_by_key(PX_MIGRATION_WORKBOOK_ID)
-        # Raw Data - all U1 customers of exiting CSPs, keyed by exit_partner_code
-        u1_raw_by_code = defaultdict(set)
-        raw = px_book.worksheet(PX_RAW_TAB).get_all_values()
-        if raw:
-            h = raw[0]
-            try:
-                c_code = h.index("exit_partner_code")
-                c_mob = h.index("Customer_mobile")
-            except ValueError:
-                c_code = c_mob = None
-            if c_code is not None and c_mob is not None:
-                for r in raw[1:]:
-                    if len(r) <= max(c_code, c_mob):
-                        continue
-                    code = str(r[c_code]).strip()
-                    mobile = str(r[c_mob]).strip()
-                    if code and mobile:
-                        u1_raw_by_code[code].add(mobile)
-        # Migrated Cases - keyed by Old Partner Name -> resolve to code
-        u1_mig_by_code = defaultdict(set)
-        mig = px_book.worksheet(PX_MIGRATED_TAB).get_all_values()
-        if mig:
-            h = mig[0]
-            c_mob_m = c_name_m = None
-            for i, hh in enumerate(h):
-                hl = str(hh).strip().lower()
-                if c_mob_m is None and "mobile" in hl:
-                    c_mob_m = i
-                if c_name_m is None and ("old partner" in hl or "exit partner" in hl):
-                    c_name_m = i
-            if c_mob_m is not None and c_name_m is not None:
-                for r in mig[1:]:
-                    if len(r) <= max(c_mob_m, c_name_m):
-                        continue
-                    nm = str(r[c_name_m]).strip().lower()
-                    if nm in SHEET_NAME_ALIAS:
-                        nm = SHEET_NAME_ALIAS[nm].lower()
-                    mobile = str(r[c_mob_m]).strip()
-                    if nm and mobile:
-                        code = s5_name_to_code.get(nm)
-                        if code:
-                            u1_mig_by_code[code].add(mobile)
-        # Pending = raw - migrated per code, only for S5 partners
-        for code, raw_set in u1_raw_by_code.items():
-            if code in {s5_name_to_code[k] for k in s5_partner_keys}:
-                u1_pending_mobiles_by_code[code] = raw_set - u1_mig_by_code.get(code, set())
-    except Exception as e:
-        print(f"PX workbook read failed (U1 dedup disabled): {e}")
-
-    # Pool ALL pending mobiles (U2 by partner name + U1 by partner code)
-    all_pending_mobiles = []
-    for key in s5_partner_keys:
-        all_pending_mobiles.extend(u2_pending_by_name.get(key, []))
-    for code, mobs in u1_pending_mobiles_by_code.items():
-        all_pending_mobiles.extend(mobs)
-    all_pending_mobiles = list(set(all_pending_mobiles))
-
-    mobile_to_nas = {}
-    if all_pending_mobiles:
-        m_in = _metabase_safe_in_list(all_pending_mobiles)
-        if m_in:
-            rows = mb_run(f"""SELECT MOBILE, NASID FROM PUBLIC.T_WG_CUSTOMER
-WHERE MOBILE IN ({m_in})""")
-            for mobile, nas in rows:
-                if mobile and nas:
-                    mobile_to_nas[str(mobile)] = str(nas)
-
-    s5_dup = 0
-    # U2 dedup pass (existing behavior)
-    for key in s5_partner_keys:
-        partner_code = s5_name_to_code.get(key)
-        idle_nas = idle_nas_by_code.get(partner_code, set()) if partner_code else set()
-        for mobile in u2_pending_by_name.get(key, []):
-            nas = mobile_to_nas.get(mobile)
-            if nas and nas in idle_nas:
-                s5_dup += 1
-    # U1 dedup pass (new)
-    for code, mobs in u1_pending_mobiles_by_code.items():
-        idle_nas = idle_nas_by_code.get(code, set())
-        for mobile in mobs:
-            nas = mobile_to_nas.get(mobile)
-            if nas and nas in idle_nas:
-                s5_dup += 1
-    print(f"S5 dedup count (U1 + U2): {s5_dup}")
+    # (S5 dedup / cnp / liability already computed by compute_s5_snapshot above.)
 
     # ── 10. Netbox Collection (S5 Netbox Collection tab) ───────────────────
     netbox_collected_by_code = defaultdict(int)
@@ -585,60 +479,10 @@ WHERE MOBILE IN ({m_in})""")
         if u1d["total"] == 0 and u2t == 0:
             s4b_pending += r15_of(p)
 
-    # S5 reconciliation
-    s5_u1_total = s5_u1_mig = s5_u2_total = s5_u2_picked = 0
-    for p in s5_partners:
-        u1d = _u1_for(p, u1_by)
-        s5_u1_total += u1d["total"]; s5_u1_mig += u1d["migrated"]
-        s5_u2_total += _u2_total_for(p, u2_total)
-        s5_u2_picked += _u2_picked_for(p, u2_picked)
-    raw_cnp = (s5_u1_total - s5_u1_mig) + (s5_u2_total - s5_u2_picked)
-    s5_could_not_pick = max(raw_cnp - s5_dup, 0)
-    s5_liability = idle_total + s5_could_not_pick
-
-    # ── SANITY FLOOR v3 (2026-06-29) — dedup-based ───────────────────────
-    # v2 floor required idle to be stable (delta <=5). That guard failed on
-    # 28-Jun when idle legitimately dropped by 37 devices (CSPs returned
-    # them) — the floor stepped back and the phantom +7 dedup drop slipped
-    # through, requiring another manual correction.
-    #
-    # v3 fix: store dedup itself in Daily Totals, then check yesterday's
-    # stored dedup directly. If today's measured dedup is meaningfully
-    # lower than yesterday's stored dedup AND raw_cnp (sheet-driven, not
-    # subject to flicker) hasn't moved much, substitute yesterday's dedup.
-    # Completely independent of idle changes.
-    try:
-        target_dt = datetime.strptime(today_str, "%Y-%m-%d").date()
-        yest_dt = (target_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-        prior_rows = _read_records_safe(ws_totals)
-        prior = next((r for r in prior_rows if str(r.get("date")) == yest_dt), None)
-        if prior:
-            yest_dedup = int(float(prior.get("s5_dedup") or 0))
-            yest_cnp_raw = int(float(prior.get("s5_cnp_raw") or 0))
-            yest_cnp = int(float(prior.get("s5_could_not_pick") or 0))
-            # Prefer dedup-based floor when yesterday's dedup is on file.
-            if yest_dedup > 0 and yest_cnp_raw > 0:
-                if (s5_dup < yest_dedup - 2
-                        and abs(raw_cnp - yest_cnp_raw) <= 5):
-                    print(f"SANITY FLOOR v3 triggered (dedup-based): "
-                          f"measured dedup={s5_dup}, yesterday dedup={yest_dedup}, "
-                          f"raw_cnp stable ({raw_cnp} vs {yest_cnp_raw}). "
-                          f"Using yesterday's dedup to filter phantom flicker.")
-                    s5_dup = yest_dedup
-                    s5_could_not_pick = max(raw_cnp - s5_dup, 0)
-                    s5_liability = idle_total + s5_could_not_pick
-            # Fallback: if yesterday's dedup is not on file (first runs
-            # after this deploy), use the old cnp-based check WITHOUT the
-            # idle-stable guard so phantom on a real-idle-shift day still
-            # gets caught.
-            elif yest_cnp > 0 and s5_could_not_pick > yest_cnp + 5:
-                print(f"SANITY FLOOR v3 triggered (fallback): "
-                      f"measured cnp={s5_could_not_pick}, yesterday cnp={yest_cnp}. "
-                      f"Using yesterday's cnp.")
-                s5_could_not_pick = yest_cnp
-                s5_liability = idle_total + s5_could_not_pick
-    except Exception as e:
-        print(f"Sanity floor check skipped (will not block snapshot): {e}")
+    # S5 metrics (cnp_raw, dedup, cnp, liability) already provided by
+    # compute_s5_snapshot() at step 7 above. Sanity floor deleted — the
+    # shared module's 5-pass NAS union is the ONLY stabilizer we need.
+    raw_cnp = s5_cnp_raw  # keep local name for the totals dict below
 
     s5_collected = sum(
         netbox_collected_by_code.get(str(p.get("partner_code") or ""), 0)
@@ -691,8 +535,20 @@ WHERE MOBILE IN ({m_in})""")
     # so older columns stay where they were and new columns land at the end.
     row = [today_str if k == "date" else int(totals.get(k, 0) or 0)
            for k in current_header]
-    ws_totals.append_row(row, value_input_option="USER_ENTERED")
-    print(f"Wrote row for {today_str}: cnp_raw={raw_cnp}, dedup={s5_dup}, cnp={s5_could_not_pick}")
+    if existing_row_number is not None:
+        # Overwrite existing row in-place (cron is source of truth)
+        end_col = chr(ord("A") + len(row) - 1) if len(row) <= 26 else "A" + chr(ord("A") + len(row) - 27)
+        # Use gspread's update on the row range
+        ws_totals.update(
+            f"A{existing_row_number}:{end_col}{existing_row_number}",
+            [row], value_input_option="USER_ENTERED",
+        )
+        print(f"Overwrote row {existing_row_number} for {today_str}: "
+              f"cnp_raw={raw_cnp}, dedup={s5_dup}, cnp={s5_could_not_pick}")
+    else:
+        ws_totals.append_row(row, value_input_option="USER_ENTERED")
+        print(f"Appended new row for {today_str}: "
+              f"cnp_raw={raw_cnp}, dedup={s5_dup}, cnp={s5_could_not_pick}")
 
     # ── 13. Per-CSP IDLE snapshot ─────────────────────────────────────────
     # Writes one row per S5 partner per day to "S5 Daily IDLE by CSP" tab.
