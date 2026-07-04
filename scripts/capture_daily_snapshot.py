@@ -241,7 +241,8 @@ def main():
         scopes=["https://www.googleapis.com/auth/spreadsheets",
                 "https://www.googleapis.com/auth/drive.readonly"],
     )
-    book = gspread.authorize(creds).open_by_key(sheet_id)
+    client = gspread.authorize(creds)
+    book = client.open_by_key(sheet_id)
 
     try:
         ws_totals = book.worksheet(TOTALS_TAB)
