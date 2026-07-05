@@ -14,7 +14,7 @@ import requests
 from google.oauth2.service_account import Credentials
 from streamlit_autorefresh import st_autorefresh
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 import hashlib
 import json

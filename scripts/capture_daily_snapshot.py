@@ -13,9 +13,7 @@ Inputs (all via env vars set by the GH Actions workflow):
 
 import json
 import os
-import re
 import sys
-import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
