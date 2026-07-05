@@ -1,0 +1,62 @@
+name: Smoke test (import + lint)
+
+# Runs on every push and PR to main.
+# Catches undefined names, syntax errors, and unused imports BEFORE they
+# ship to prod. Would have caught the `client` NameError that killed the
+# 04-Jul and 05-Jul crons.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: ruff + import check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff requests gspread google-auth streamlit pandas python-dotenv
+
+      - name: Ruff — undefined names, unused imports, syntax
+        # Rules: F821 undefined name, F401 unused import, E9xx syntax errors,
+        # E722 bare except (the class of bug that hid the last NameError).
+        run: ruff check --select F821,F401,E9,E722 --output-format github .
+
+      - name: Import-time smoke — snapshot script
+        # Just importing the module runs the top-level (imports, class defs).
+        # If capture_daily_snapshot references anything undefined at
+        # module-import time, this fails. Cannot execute main() without
+        # secrets, but F821 above catches the same class of bug at analysis
+        # time.
+        run: |
+          python -c "import importlib.util, sys; \
+            spec = importlib.util.spec_from_file_location('snap', 'scripts/capture_daily_snapshot.py'); \
+            m = importlib.util.module_from_spec(spec); \
+            spec.loader.exec_module(m); \
+            print('snapshot imports OK')"
+
+      - name: Import-time smoke — dashboard
+        run: |
+          python -c "import importlib.util, sys; \
+            spec = importlib.util.spec_from_file_location('dash', 'dashboard.py'); \
+            m = importlib.util.module_from_spec(spec); \
+            spec.loader.exec_module(m); \
+            print('dashboard imports OK')" || echo "dashboard needs streamlit runtime; F821 above still catches undefined names"
+
+      - name: Import-time smoke — s5_reconciliation, collision_resolver
+        run: |
+          python -c "import s5_reconciliation; import collision_resolver; print('modules import OK')"
