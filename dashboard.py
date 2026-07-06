@@ -2229,21 +2229,32 @@ def render():
     except Exception:
         pass
 
-    # ── Cron is the S5 source of truth (2026-07-03 rewrite). ──
-    # The latest Daily Totals row (labelled with today's date, since cron
-    # writes 23:30 IST which labels next day) represents cron-computed S5
-    # metrics. Dashboard-live single-shot NAS was the root cause of every
-    # ±7 phantom drift. Now we display cron's number for every S5 field.
-    for k in ("s5_idle", "s5_could_not_pick", "s5_liability",
-              "s5_collected", "s6_idle", "s6_collected"):
+    # ── Cron overrides — narrow scope (2026-07-06 refinement). ──
+    # The 2026-07-03 rewrite made cron the source of truth for ALL S5 fields
+    # to stop the ±7 phantom-drift from single-shot NAS flicker. That fix
+    # over-corrected: when a partner moves S4→S5 intraday, live s5_csps
+    # updates but the frozen idle/liability stay stale, producing a
+    # roster-vs-liability mismatch (2026-07-06, 60 CSPs moved from S4→S5
+    # and only the CSP count updated — Kapil flagged this).
+    #
+    # Narrow the override to the truly flicker-prone fields only:
+    #   s5_could_not_pick, s5_dedup   — depend on 5-pass NAS union
+    #   s5_collected, s6_collected    — sheet aggregates (cron is truth here too)
+    # Let s5_idle / s5_liability / s6_idle remain LIVE so intraday roster
+    # changes show up immediately. Recompute liability = live_idle +
+    # cron_cnp so cnp stays authoritative but the CSP-count delta lands
+    # in liability.
+    for k in ("s5_could_not_pick", "s5_collected", "s6_collected"):
         if yest_totals.get(k) is not None:
             today_metrics[k] = yest_totals[k]
     if yest_totals.get("s5_dedup") is not None:
         s5_dedup = {"duplicates": yest_totals["s5_dedup"]}
-    if yest_totals.get("s5_idle") is not None:
-        idle_total = yest_totals["s5_idle"]
-    if yest_totals.get("s6_idle") is not None:
-        idle_total_s6 = yest_totals["s6_idle"]
+    # Recompute liability off live idle + cron cnp
+    if today_metrics.get("s5_could_not_pick") is not None \
+            and today_metrics.get("s5_idle") is not None:
+        today_metrics["s5_liability"] = (
+            today_metrics["s5_idle"] + today_metrics["s5_could_not_pick"]
+        )
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Status & Cohorts", "CSP Exit Funnel", "Data Quality", "Search",
