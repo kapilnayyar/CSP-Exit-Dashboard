@@ -538,15 +538,20 @@ def fetch_u1_customers(supabase_url, supabase_key):
 
 @st.cache_data(ttl=300)
 def metabase_query(metabase_url, api_key, sql, database_id=113):
-    """Run a Snowflake query via Metabase API. Cached 5 min (heavier query)."""
+    """Run a Snowflake query via Metabase API. Cached 5 min (heavier query).
+    'constraints' bypasses the default 2000-row cap so T_DEVICE IDLE queries
+    (which can return 60K+ rows) come back complete."""
     if not metabase_url or not api_key:
         return {"rows": [], "cols": [], "error": "Metabase not configured"}
     try:
         r = requests.post(
             f"{metabase_url}/api/dataset",
             headers={"x-api-key": api_key, "Content-Type": "application/json"},
-            json={"database": database_id, "type": "native", "native": {"query": sql}},
-            timeout=60,
+            json={"database": database_id, "type": "native",
+                  "native": {"query": sql},
+                  "constraints": {"max-results": 1_000_000,
+                                    "max-results-bare-rows": 1_000_000}},
+            timeout=120,
         )
         if r.status_code not in (200, 202):
             return {"rows": [], "cols": [], "error": f"HTTP {r.status_code}"}

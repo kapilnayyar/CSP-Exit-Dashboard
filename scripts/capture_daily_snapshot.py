@@ -322,11 +322,16 @@ def main():
     mb_hdr = {"x-api-key": mb_key, "Content-Type": "application/json"}
 
     def mb_run(sql):
+        # 'constraints' bypasses Metabase's default 2000-row cap on the
+        # /api/dataset endpoint. Needed for T_DEVICE IDLE queries that
+        # return one row per idle device (up to 67K+ across all partners).
         res = requests.post(
             f"{mb_url}/api/dataset",
             json={"database": 113, "type": "native",
-                  "native": {"query": sql, "template-tags": {}}},
-            headers=mb_hdr, timeout=120,
+                  "native": {"query": sql, "template-tags": {}},
+                  "constraints": {"max-results": 1_000_000,
+                                    "max-results-bare-rows": 1_000_000}},
+            headers=mb_hdr, timeout=180,
         )
         if res.status_code not in (200, 202):
             print(f"Metabase ERR {res.status_code}: {res.text[:300]}")
