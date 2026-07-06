@@ -405,6 +405,64 @@ def fetch_px_migration(gcp_creds):
     return dict(u1_raw_by_code), migrated_rows
 
 
+@st.cache_data(ttl=300)
+def fetch_px_migration_full(gcp_creds):
+    """Read PX Migration Raw Data (all columns) + PX Migrated Cases mobile set.
+
+    Returns:
+      raw_rows: list[dict] — every row from PX Migration Raw Data with all
+                columns preserved (used to render U1 customer lists in Search 4).
+      migrated_mobiles: set[str] — mobiles present in PX Migrated Cases.
+                Cross-referenced by mobile alone (no name matching needed —
+                mobile is the strong identifier).
+    """
+    creds = Credentials.from_service_account_info(
+        gcp_creds,
+        scopes=["https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive.readonly"],
+    )
+    client = gspread.authorize(creds)
+    try:
+        book = client.open_by_key(PX_MIGRATION_WORKBOOK_ID)
+    except Exception:
+        return [], set()
+
+    # Raw Data — read all columns as dict rows
+    raw_rows = []
+    try:
+        raw_vals = book.worksheet(PX_RAW_TAB).get_all_values()
+        if raw_vals:
+            hdr = [h.strip() for h in raw_vals[0]]
+            for r in raw_vals[1:]:
+                padded = list(r) + [""] * max(0, len(hdr) - len(r))
+                if any(v.strip() for v in padded if isinstance(v, str)):
+                    raw_rows.append(dict(zip(hdr, padded)))
+    except Exception:
+        pass
+
+    # Migrated Cases — extract mobiles (case + strip normalized)
+    migrated_mobiles = set()
+    try:
+        mig_vals = book.worksheet(PX_MIGRATED_TAB).get_all_values()
+        if mig_vals:
+            mig_hdr = mig_vals[0]
+            c_mob = None
+            for i, h in enumerate(mig_hdr):
+                if "mobile" in str(h).strip().lower():
+                    c_mob = i
+                    break
+            if c_mob is not None:
+                for r in mig_vals[1:]:
+                    if len(r) > c_mob:
+                        m = str(r[c_mob]).strip()
+                        if m:
+                            migrated_mobiles.add(m)
+    except Exception:
+        pass
+
+    return raw_rows, migrated_mobiles
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SUPABASE — partner-exit-tracker state (read-only via anon key)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1977,10 +2035,60 @@ def render_tab4_search(partners, u2_rows, secrets):
 
     st.divider()
 
-    # ── Search 4: U1 migration list (placeholder) ────────────────────────────
-    st.markdown("### 🔍 Search 4 — U1 Migration Status (from new Google Sheet)")
-    st.warning("📋 Data source not yet configured. Share the new Google Sheet tab name + columns and I'll wire it in.")
-    st.caption("Will support partner selection + filter (Migrated / Not Migrated) once the source is added.")
+    # ── Search 4: U1 migration list ──────────────────────────────────────────
+    # Source: PX/CX Migration Summary workbook (PX_MIGRATION_WORKBOOK_ID)
+    #   PX Migration Raw Data   → all U1 customers of exiting CSPs (source of truth)
+    #   PX Migrated Cases       → the ones already migrated
+    # Match by Customer_mobile: mobile present in Migrated → Migrated=Yes.
+    st.markdown("### 🔍 Search 4 — U1 Migration Status (from PX Migration Summary)")
+    p4 = partner_picker("s4_pick")
+    if p4:
+        st.write(f"**{p4['name']}** · Code: `{p4.get('partner_code','')}` · State: `{p4['current_state']}`")
+        partner_code_str = str(p4.get("partner_code") or "").strip()
+        with st.spinner("Loading PX Migration data..."):
+            raw_rows, migrated_mobiles = fetch_px_migration_full(secrets["gcp_creds"])
+
+        partner_rows = [
+            r for r in raw_rows
+            if str(r.get("exit_partner_code", "")).strip() == partner_code_str
+        ]
+
+        if not partner_rows:
+            st.info(
+                f"No U1 customers found in PX Migration Raw Data for partner "
+                f"code `{partner_code_str}`."
+            )
+        else:
+            f4 = st.radio(
+                "Filter:",
+                ["All", "Migrated", "Not Migrated"],
+                horizontal=True, key="s4_filter",
+            )
+            display_rows = []
+            for r in partner_rows:
+                mobile = str(r.get("Customer_mobile") or "").strip()
+                is_migrated = bool(mobile) and (mobile in migrated_mobiles)
+                if f4 == "Migrated" and not is_migrated: continue
+                if f4 == "Not Migrated" and is_migrated: continue
+                display_rows.append({**r, "Migrated?": "Yes" if is_migrated else "No"})
+
+            if display_rows:
+                df = pd.DataFrame(display_rows)
+                cols = [c for c in df.columns if c != "Migrated?"] + ["Migrated?"]
+                st.dataframe(df[cols], use_container_width=True, hide_index=True)
+
+                total_partner = len(partner_rows)
+                migrated_count = sum(
+                    1 for r in partner_rows
+                    if str(r.get("Customer_mobile") or "").strip() in migrated_mobiles
+                )
+                st.caption(
+                    f"{len(display_rows)} matching row(s). "
+                    f"Overall: {migrated_count}/{total_partner} U1 customers migrated "
+                    f"({(migrated_count/total_partner*100):.1f}%)."
+                )
+            else:
+                st.info("No U1 customers match the selected filter.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
