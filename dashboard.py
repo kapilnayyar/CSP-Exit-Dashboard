@@ -427,16 +427,27 @@ def fetch_px_migration_full(gcp_creds):
     except Exception:
         return [], set()
 
-    # Raw Data — read all columns as dict rows
+    # Raw Data — read all columns as dict rows.
+    # The Raw Data tab has an appended pivot-table block after column 16 that
+    # duplicates `exit_partner_code` and `exit_partner_name` as summary columns.
+    # Truncate the header at the first EMPTY column so the pivot doesn't shadow
+    # the primary data columns via dict-key collision.
     raw_rows = []
     try:
         raw_vals = book.worksheet(PX_RAW_TAB).get_all_values()
         if raw_vals:
-            hdr = [h.strip() for h in raw_vals[0]]
+            full_hdr = [h.strip() for h in raw_vals[0]]
+            # Cut at first empty column (marks start of pivot block)
+            end = len(full_hdr)
+            for i, h in enumerate(full_hdr):
+                if not h:
+                    end = i
+                    break
+            hdr = full_hdr[:end]
             for r in raw_vals[1:]:
-                padded = list(r) + [""] * max(0, len(hdr) - len(r))
-                if any(v.strip() for v in padded if isinstance(v, str)):
-                    raw_rows.append(dict(zip(hdr, padded)))
+                cells = [r[i] if i < len(r) else "" for i in range(end)]
+                if any(v.strip() for v in cells if isinstance(v, str)):
+                    raw_rows.append(dict(zip(hdr, cells)))
     except Exception:
         pass
 
