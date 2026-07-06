@@ -14,7 +14,7 @@ import requests
 from google.oauth2.service_account import Credentials
 from streamlit_autorefresh import st_autorefresh
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import hashlib
 import json
@@ -1261,14 +1261,8 @@ def write_today_totals(book, totals):
     return True
 
 
-def read_yesterday_totals(book):
-    """Return {column → int} for the D-1 baseline in Daily Totals; {} if missing.
-
-    D-1 reads TODAY's stored row. Why: the GH-Action snapshot writes today's
-    row at exactly 00:00 IST — that snapshot IS yesterday's close-of-business.
-    So today's stored row = end-of-yesterday = correct D-1 baseline.
-    Delta on dashboard = live_now - today's_stored = today's movement.
-    """
+def _read_totals_row_for_date(book, date_str):
+    """Return {column → int} for a specific Daily Totals row, {} if missing."""
     try:
         ws = book.worksheet(TOTALS_TAB)
     except Exception:
@@ -1277,9 +1271,8 @@ def read_yesterday_totals(book):
         rows = _read_records_safe(ws)
     except Exception:
         return {}
-    today = datetime.now(IST).strftime("%Y-%m-%d")
     for r in rows:
-        if str(r.get("date") or "").strip() == today:
+        if str(r.get("date") or "").strip() == date_str:
             out = {}
             for k in TOTALS_HEADERS[1:]:
                 try:
@@ -1288,6 +1281,28 @@ def read_yesterday_totals(book):
                     out[k] = 0
             return out
     return {}
+
+
+def read_today_totals(book):
+    """Return today's Daily Totals row — source of cron-authoritative fields
+    (s5_could_not_pick, s5_dedup, s5_collected). The 2026-07-03 rewrite made
+    cron write the row dated with the CURRENT IST date; the row therefore
+    represents today's snapshot, not yesterday's close."""
+    today = datetime.now(IST).strftime("%Y-%m-%d")
+    return _read_totals_row_for_date(book, today)
+
+
+def read_yesterday_totals(book):
+    """Return yesterday's Daily Totals row — the D-1 baseline for Tab 5's
+    delta view. Yesterday's row represents state at yesterday's snapshot;
+    today's live values minus yesterday's row = today's movement.
+
+    Prior implementation read today's row here (relic of the old 00:00 IST
+    cron that labeled rows with next-day dates). Under the current 23:30 IST
+    cron the row date equals the capture date, so D-1 must read the
+    calendar-yesterday row explicitly."""
+    yesterday = (datetime.now(IST) - timedelta(days=1)).strftime("%Y-%m-%d")
+    return _read_totals_row_for_date(book, yesterday)
 
 
 def compute_s5_freshness(book):
@@ -2213,7 +2228,8 @@ def render():
         partners, u1_by, u2_total, u2_picked, r15_by_code,
         idle_total, s5_dedup, netbox_collected_by_code, idle_total_s6,
     )
-    yest_totals = {}
+    today_totals = {}   # today's cron row — authoritative for cnp/dedup
+    yest_totals = {}    # yesterday's cron row — D-1 baseline for delta
     s5_freshness = None  # (hours_ago, status_word)
     try:
         _creds = Credentials.from_service_account_info(
@@ -2224,6 +2240,7 @@ def render():
         book = gspread.authorize(_creds).open_by_key(secrets["sheet_id"])
         # DO NOT write from dashboard — only cron writes S5 truth to Daily
         # Totals. See s5_reconciliation.py + capture_daily_snapshot.py.
+        today_totals = read_today_totals(book)
         yest_totals = read_yesterday_totals(book)
         s5_freshness = compute_s5_freshness(book)
     except Exception:
@@ -2244,11 +2261,16 @@ def render():
     # changes show up immediately. Recompute liability = live_idle +
     # cron_cnp so cnp stays authoritative but the CSP-count delta lands
     # in liability.
+    #
+    # Override reads TODAY's row (cron's fresh snapshot of these fields).
+    # Delta baseline (D-1) reads YESTERDAY's row separately — that's what
+    # gives Tab 5 the "since yesterday" comparison. Prior code confused
+    # the two, causing D0==D-1 → zero delta on every field.
     for k in ("s5_could_not_pick", "s5_collected", "s6_collected"):
-        if yest_totals.get(k) is not None:
-            today_metrics[k] = yest_totals[k]
-    if yest_totals.get("s5_dedup") is not None:
-        s5_dedup = {"duplicates": yest_totals["s5_dedup"]}
+        if today_totals.get(k) is not None:
+            today_metrics[k] = today_totals[k]
+    if today_totals.get("s5_dedup") is not None:
+        s5_dedup = {"duplicates": today_totals["s5_dedup"]}
     # Recompute liability off live idle + cron cnp
     if today_metrics.get("s5_could_not_pick") is not None \
             and today_metrics.get("s5_idle") is not None:
