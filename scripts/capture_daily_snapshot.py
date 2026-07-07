@@ -464,15 +464,11 @@ GROUP BY 1"""
         n = p["name"].lower()
         return SHEET_NAME_ALIAS.get(n, p["name"]).lower() if n in SHEET_NAME_ALIAS else n
 
-    s4a_csps = len(completed)
-    s4a_u1_total = sum(_u1_for(p, u1_by)["total"] for p in completed)
-    s4a_u1_mig = sum(_u1_for(p, u1_by)["migrated"] for p in completed)
-    s4a_u2_total = sum(_u2_total_for(p, u2_total) for p in completed)
-    s4a_u2_pick = sum(_u2_picked_for(p, u2_picked) for p in completed)
-
-    # Migration Done (S4B) — per Kapil's rule 2026-07-07: use PX Migrated
-    # Cases row-count keyed by Old LCO Id. Read here so cron and dashboard
-    # write the same number to Daily Totals.
+    # Migration Done — per Kapil's rule 2026-07-07: use PX Migrated Cases
+    # row-count keyed by Old LCO Id (partner_code). Applies to BOTH S4A
+    # (completed, in S5/S6) and S4B (currently in S4). Cron and dashboard
+    # write the same number to Daily Totals so Tab 5's delta = 0 when no
+    # migrations happened.
     px_mig_by_code = defaultdict(int)
     try:
         px_mig_vals = px_book.worksheet(PX_MIGRATED_TAB).get_all_values()
@@ -494,8 +490,18 @@ GROUP BY 1"""
               f"{len(px_mig_by_code)} partners")
     except Exception as e:
         print(f"WARN: PX Migrated Cases fetch failed ({e}); falling back to "
-              "Migration Data sheet for s4b_u1_mig")
+              "Migration Data sheet for s4a_u1_mig and s4b_u1_mig")
         px_mig_by_code = None
+
+    s4a_csps = len(completed)
+    s4a_u1_total = sum(_u1_for(p, u1_by)["total"] for p in completed)
+    if px_mig_by_code is not None:
+        s4a_u1_mig = sum(px_mig_by_code.get(str(p.get("partner_code") or ""), 0)
+                         for p in completed)
+    else:
+        s4a_u1_mig = sum(_u1_for(p, u1_by)["migrated"] for p in completed)
+    s4a_u2_total = sum(_u2_total_for(p, u2_total) for p in completed)
+    s4a_u2_pick = sum(_u2_picked_for(p, u2_picked) for p in completed)
 
     s4b_csps = len(s4_partners)
     s4b_u1 = s4b_u1_mig = s4b_u2 = s4b_u2_pick = s4b_pending = 0
