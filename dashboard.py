@@ -406,48 +406,6 @@ def fetch_px_migration(gcp_creds):
 
 
 @st.cache_data(ttl=300)
-def fetch_px_migrated_count_by_code(gcp_creds):
-    """Count PX Migrated Cases events per partner_code (Old LCO Id).
-
-    Returns {partner_code_str: n_migrations}. Kapil's rule (2026-07-07):
-    the authoritative count of U1 migrations for a CSP is the row-count
-    in PX Migrated Cases where Old LCO Id matches the partner_code, NOT
-    the aggregate `Migrated` column of the Migration Data sheet. PX is
-    keyed by account ID so it's collision-proof (no name matching).
-    """
-    creds = Credentials.from_service_account_info(
-        gcp_creds,
-        scopes=["https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/drive.readonly"],
-    )
-    client = gspread.authorize(creds)
-    try:
-        book = client.open_by_key(PX_MIGRATION_WORKBOOK_ID)
-    except Exception:
-        return {}
-    try:
-        vals = book.worksheet(PX_MIGRATED_TAB).get_all_values()
-    except Exception:
-        return {}
-    if not vals:
-        return {}
-    hdr = vals[0]
-    try:
-        c_code = next(i for i, h in enumerate(hdr)
-                      if str(h).strip().lower() in ("old lco id", "old_lco_id"))
-    except StopIteration:
-        return {}
-    counts = defaultdict(int)
-    for r in vals[1:]:
-        if len(r) <= c_code:
-            continue
-        code = str(r[c_code]).strip()
-        if code:
-            counts[code] += 1
-    return dict(counts)
-
-
-@st.cache_data(ttl=300)
 def fetch_px_migration_full(gcp_creds):
     """Read PX Migration Raw Data (all columns) + PX Migrated Cases mobile set.
 
@@ -1168,7 +1126,7 @@ def fmt_pct(n, denom):
 
 def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
                           idle_total, s5_dedup, netbox_collected_by_code,
-                          idle_total_s6, px_mig_by_code=None):
+                          idle_total_s6):
     """Aggregate today's funnel metrics into the flat dict written to Daily Totals.
 
     Self-contained: computes S5 reconciliation (could_not_pick, liability,
@@ -1229,14 +1187,7 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
         u2t = _u2_total_for(p, u2_total)
         u2p = _u2_picked_for(p, u2_picked)
         s4b_u1 += u1d["total"]
-        # Migration Done — per Kapil's rule (2026-07-07): PX Migrated Cases
-        # is the authoritative row-per-event source, joined by Old LCO Id.
-        # Falls back to Migration Data if the PX map wasn't provided.
-        if px_mig_by_code is not None:
-            code = str(p.get("partner_code") or "")
-            s4b_u1_mig += px_mig_by_code.get(code, 0)
-        else:
-            s4b_u1_mig += u1d["migrated"]
+        s4b_u1_mig += u1d["migrated"]
         s4b_u2 += u2t
         s4b_u2_pick += u2p
         if u1d["total"] == 0 and u2t == 0:
@@ -2278,14 +2229,9 @@ def render():
     )
 
     # ── Daily Totals capture + D-1 read (powers Tab 5) ────────────────────────
-    # Migration Done (S4B): fetch PX Migrated Cases counts by partner_code
-    # so compute_today_metrics can use the row-per-event count instead of
-    # the Migration Data `Migrated` column (Kapil's rule 2026-07-07).
-    px_mig_by_code = fetch_px_migrated_count_by_code(secrets["gcp_creds"])
     today_metrics = compute_today_metrics(
         partners, u1_by, u2_total, u2_picked, r15_by_code,
         idle_total, s5_dedup, netbox_collected_by_code, idle_total_s6,
-        px_mig_by_code=px_mig_by_code,
     )
     today_totals = {}   # today's cron row — authoritative for cnp/dedup
     yest_totals = {}    # yesterday's cron row — D-1 baseline for delta

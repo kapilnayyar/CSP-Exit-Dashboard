@@ -470,33 +470,6 @@ GROUP BY 1"""
     s4a_u2_total = sum(_u2_total_for(p, u2_total) for p in completed)
     s4a_u2_pick = sum(_u2_picked_for(p, u2_picked) for p in completed)
 
-    # Migration Done (S4B) — per Kapil's rule 2026-07-07: use PX Migrated
-    # Cases row-count keyed by Old LCO Id. Read here so cron and dashboard
-    # write the same number to Daily Totals.
-    px_mig_by_code = defaultdict(int)
-    try:
-        px_mig_vals = px_book.worksheet(PX_MIGRATED_TAB).get_all_values()
-        if px_mig_vals:
-            hdr_mig = px_mig_vals[0]
-            c_code_mig = next(
-                (i for i, h in enumerate(hdr_mig)
-                 if str(h).strip().lower() in ("old lco id", "old_lco_id")),
-                None,
-            )
-            if c_code_mig is not None:
-                for r in px_mig_vals[1:]:
-                    if len(r) <= c_code_mig:
-                        continue
-                    code = str(r[c_code_mig]).strip()
-                    if code:
-                        px_mig_by_code[code] += 1
-        print(f"[px-migrated] {sum(px_mig_by_code.values())} events across "
-              f"{len(px_mig_by_code)} partners")
-    except Exception as e:
-        print(f"WARN: PX Migrated Cases fetch failed ({e}); falling back to "
-              "Migration Data sheet for s4b_u1_mig")
-        px_mig_by_code = None
-
     s4b_csps = len(s4_partners)
     s4b_u1 = s4b_u1_mig = s4b_u2 = s4b_u2_pick = s4b_pending = 0
     for p in s4_partners:
@@ -504,10 +477,7 @@ GROUP BY 1"""
         u2t = _u2_total_for(p, u2_total)
         u2p = _u2_picked_for(p, u2_picked)
         s4b_u1 += u1d["total"]
-        if px_mig_by_code is not None:
-            s4b_u1_mig += px_mig_by_code.get(str(p.get("partner_code") or ""), 0)
-        else:
-            s4b_u1_mig += u1d["migrated"]
+        s4b_u1_mig += u1d["migrated"]
         s4b_u2 += u2t
         s4b_u2_pick += u2p
         if u1d["total"] == 0 and u2t == 0:
