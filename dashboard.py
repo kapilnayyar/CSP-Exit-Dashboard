@@ -1214,13 +1214,7 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
     # S4a — completed (in S5 or S6)
     s4a_csps = len(completed)
     s4a_u1_total = sum(_u1_for(p, u1_by)["total"] for p in completed)
-    # Migration Done (S4A) — same PX-Migrated-Cases rule as S4B (Kapil's rule
-    # extended to both scenarios 2026-07-07).
-    if px_mig_by_code is not None:
-        s4a_u1_mig = sum(px_mig_by_code.get(str(p.get("partner_code") or ""), 0)
-                         for p in completed)
-    else:
-        s4a_u1_mig = sum(_u1_for(p, u1_by)["migrated"] for p in completed)
+    s4a_u1_mig = sum(_u1_for(p, u1_by)["migrated"] for p in completed)
     s4a_u2_total = sum(_u2_total_for(p, u2_total) for p in completed)
     s4a_u2_pick = sum(_u2_picked_for(p, u2_picked) for p in completed)
     # Userbase for completed partners — uses sheet (U1+U2) where available,
