@@ -365,9 +365,13 @@ def fetch_px_migration(gcp_creds):
             hdr = raw[0]
             try:
                 c_code = hdr.index("exit_partner_code")
-                c_mob = hdr.index("Customer_mobile")
             except ValueError:
-                c_code = c_mob = None
+                c_code = None
+            c_mob = None
+            for candidate in ("Customer_mobile", "customer_number", "customer_mobile"):
+                if candidate in hdr:
+                    c_mob = hdr.index(candidate)
+                    break
             if c_code is not None and c_mob is not None:
                 for r in raw[1:]:
                     if len(r) <= max(c_code, c_mob):
@@ -444,10 +448,22 @@ def fetch_px_migration_full(gcp_creds):
                     end = i
                     break
             hdr = full_hdr[:end]
+            # Normalize mobile column name — sheet was renamed to
+            # 'customer_number' at some point. Search 4 downstream code
+            # reads 'Customer_mobile'; keep both keys for safety.
+            mobile_src = None
+            for candidate in ("Customer_mobile", "customer_number",
+                              "customer_mobile"):
+                if candidate in hdr:
+                    mobile_src = candidate
+                    break
             for r in raw_vals[1:]:
                 cells = [r[i] if i < len(r) else "" for i in range(end)]
                 if any(v.strip() for v in cells if isinstance(v, str)):
-                    raw_rows.append(dict(zip(hdr, cells)))
+                    row_dict = dict(zip(hdr, cells))
+                    if mobile_src and mobile_src != "Customer_mobile":
+                        row_dict["Customer_mobile"] = row_dict.get(mobile_src, "")
+                    raw_rows.append(row_dict)
     except Exception:
         pass
 

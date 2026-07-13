@@ -244,11 +244,20 @@ def load_px_migration(px_book, name_to_owner_code, losers, s5s6_codes):
     = (raw customers) - (migrated customers) restricted to S5/S6 codes."""
     # Raw Data (keyed by exit_partner_code — no name resolution needed)
     raw_hdr, raw_rows = _read_sheet_values_safe(px_book.worksheet(PX_RAW_TAB))
+    # Mobile column has been renamed at least once — accept either.
     try:
         c_code = raw_hdr.index("exit_partner_code")
-        c_mob = raw_hdr.index("Customer_mobile")
     except ValueError as e:
-        raise RuntimeError(f"PX Migration Raw Data missing column: {e}")
+        raise RuntimeError(f"PX Migration Raw Data missing 'exit_partner_code': {e}")
+    c_mob = None
+    for candidate in ("Customer_mobile", "customer_number", "customer_mobile"):
+        if candidate in raw_hdr:
+            c_mob = raw_hdr.index(candidate)
+            break
+    if c_mob is None:
+        raise RuntimeError(
+            f"PX Migration Raw Data missing mobile column "
+            f"(tried Customer_mobile / customer_number / customer_mobile; hdr={raw_hdr[:20]})")
 
     raw_by_code = defaultdict(set)
     for r in raw_rows:
