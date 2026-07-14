@@ -2239,10 +2239,19 @@ def render():
         'CSP EXIT TRACKER</div>',
         unsafe_allow_html=True,
     )
-    st.markdown(
-        '<div class="updated">Live — auto-refreshes every 5 minutes</div>',
-        unsafe_allow_html=True,
-    )
+    # Freshness caption + manual refresh button on the same row
+    _c1, _c2 = st.columns([5, 1])
+    with _c1:
+        st.markdown(
+            '<div class="updated">Live — auto-refreshes every 5 minutes</div>',
+            unsafe_allow_html=True,
+        )
+    with _c2:
+        if st.button("🔄 Refresh", key="manual_refresh",
+                     help="Clear the 5-minute cache and pull fresh data from "
+                          "sheets, Metabase and Supabase right now."):
+            st.cache_data.clear()
+            st.rerun()
 
     # ── Daily Totals capture + D-1 read (powers Tab 5) ────────────────────────
     today_metrics = compute_today_metrics(
