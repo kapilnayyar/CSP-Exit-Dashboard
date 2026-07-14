@@ -2271,7 +2271,12 @@ def render():
         # DO NOT write from dashboard — only cron writes S5 truth to Daily
         # Totals. See s5_reconciliation.py + capture_daily_snapshot.py.
         today_totals = read_today_totals(book)
-        yest_totals = read_yesterday_totals(book)
+        # Under Kapil's D+1 report convention (2026-07-14): the row dated
+        # calendar-today represents state at end of YESTERDAY (that's
+        # yesterday's report D0). So dashboard's D-1 baseline for Tab 5
+        # delta = today's calendar row (same as today_totals). Live D0
+        # minus this baseline = today's in-progress work.
+        yest_totals = today_totals
         s5_freshness = compute_s5_freshness(book)
     except Exception:
         pass
