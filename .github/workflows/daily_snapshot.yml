@@ -1,14 +1,16 @@
-name: Daily Snapshot (23:30 IST)
+name: Daily Snapshot (01:30 IST)
 
-# Runs every day at 23:30 IST = 18:00 UTC.
-# Moved earlier from 23:55 -> 23:30 on 2026-06-25 because a recurring "+7 phantom
-# dedup drop" was hitting the cron 5 days in a row. The flicker pattern suggests
-# a midnight inventory refresh job was overlapping the 23:55 window. Earlier slot
-# avoids that overlap. The sanity floor in capture_daily_snapshot.py is the
-# backstop if it still happens.
+# Runs every day at 01:30 IST (= 20:00 UTC previous day).
+# Moved from 23:30 IST -> 01:30 IST on 2026-07-14 per Kapil's business-day
+# rule: edits made before 01:30 IST count as previous day's work, after
+# 01:30 IST count as current day. Cron at 01:30 IST captures the tail end
+# of the prior business day so late-evening sheet edits aren't missed.
+# Row date labelling stays as calendar IST date of the cron run: a row
+# dated 2026-07-15 captured at 01:30 IST on 15-Jul contains state at end
+# of business day 14-Jul (matches Kapil's D+1 report convention).
 on:
   schedule:
-    - cron: "0 18 * * *"
+    - cron: "0 20 * * *"
   workflow_dispatch:  # also allow manual trigger from GitHub UI
 
 jobs:

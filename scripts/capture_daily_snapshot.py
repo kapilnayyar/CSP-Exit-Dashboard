@@ -583,6 +583,89 @@ GROUP BY 1"""
     else:
         print(f"Per-CSP IDLE rows for {today_str} already present — skipped.")
 
+    # ── 12. Per-partner daily log (append changed rows only) ───────────────
+    # Kapil-approved 2026-07-14. One row per partner per day when ANY of
+    # the tracked fields (u1_total, u1_migrated, u2_total, u2_picked,
+    # idle_count, netbox_collected) differs from that partner's last
+    # logged row. Lets Kapil pin down which partner shifted when there's
+    # an unexplained aggregate delta.
+    PARTNER_LOG_TAB = "Per-Partner Daily Log"
+    LOG_HEADERS = ["date", "partner_code", "name", "current_state",
+                   "u1_total", "u1_migrated",
+                   "u2_total", "u2_picked",
+                   "idle_count", "netbox_collected"]
+    try:
+        ws_plog = book.worksheet(PARTNER_LOG_TAB)
+    except gspread.WorksheetNotFound:
+        ws_plog = book.add_worksheet(PARTNER_LOG_TAB, rows=50000, cols=12)
+        ws_plog.append_row(LOG_HEADERS, value_input_option="USER_ENTERED")
+        print(f"Created new tab '{PARTNER_LOG_TAB}' with headers.")
+
+    # Latest-row-per-partner dict: iterate existing rows, keep last one per code
+    existing_log = ws_plog.get_all_values()
+    latest_by_code = {}
+    if len(existing_log) > 1:
+        # Assume col 1 = partner_code; skip header row
+        for row in existing_log[1:]:
+            if len(row) < 2 or not row[1]:
+                continue
+            latest_by_code[str(row[1]).strip()] = row
+
+    # Build today's per-partner row values for every S4+S5+S6 partner
+    # (partners at earlier stages don't yet have sheet data worth logging).
+    def _in_scope(p):
+        return p.get("current_state") in ("S4", "S5", "S6")
+
+    # u2_total, u2_picked keyed by lowercased name (from build_sheet_lookups)
+    # idle_count_by_code from compute_s5_snapshot
+    # netbox_collected_by_code from Section 10
+    def _partner_row(p):
+        code = str(p.get("partner_code") or "")
+        name = p.get("name", "")
+        state = p.get("current_state", "")
+        u1d = _u1_for(p, u1_by)
+        u2t = _u2_total_for(p, u2_total)
+        u2p = _u2_picked_for(p, u2_picked)
+        idle = int(idle_count_by_code.get(code, 0)) if code in idle_count_by_code else 0
+        collected = int(netbox_collected_by_code.get(code, 0))
+        return [today_str, code, name, state,
+                int(u1d.get("total", 0)), int(u1d.get("migrated", 0)),
+                int(u2t), int(u2p), idle, collected]
+
+    scoped_partners = [p for p in partners if _in_scope(p)]
+    rows_to_append = []
+    for p in scoped_partners:
+        row = _partner_row(p)
+        code = row[1]
+        prev = latest_by_code.get(code)
+        if prev is None:
+            # First-time entry for this partner — always log
+            rows_to_append.append(row)
+            continue
+        # Compare tracked fields (columns 4..9 = state and the 6 numeric metrics)
+        # Skip 'date' (col 0) and 'name' (col 2) — those aren't "changes" we care about
+        changed = False
+        for idx in (3, 4, 5, 6, 7, 8, 9):
+            prev_val = prev[idx] if len(prev) > idx else ""
+            cur_val = row[idx]
+            try:
+                if int(str(prev_val).replace(",", "").strip() or 0) != int(cur_val):
+                    changed = True
+                    break
+            except (ValueError, TypeError):
+                if str(prev_val).strip() != str(cur_val).strip():
+                    changed = True
+                    break
+        if changed:
+            rows_to_append.append(row)
+
+    if rows_to_append:
+        ws_plog.append_rows(rows_to_append, value_input_option="USER_ENTERED")
+        print(f"[per-partner-log] appended {len(rows_to_append)} changed "
+              f"rows (of {len(scoped_partners)} in-scope partners)")
+    else:
+        print(f"[per-partner-log] no partner changed — nothing appended")
+
 
 if __name__ == "__main__":
     main()
