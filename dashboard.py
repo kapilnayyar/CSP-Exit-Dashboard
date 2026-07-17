@@ -2182,55 +2182,52 @@ def render():
         secrets["metabase_url"], secrets["metabase_key"], all_codes,
     ) if secrets.get("metabase_key") else {}
 
-    # ── S5 dedup: U2 pending AND U1 pending customers whose NAS is already IDLE ─
-    # Extended 2026-07-02 to also cover U1 pending customers (per Kapil).
-    # U1 pending mobiles come from PX/CX Migration Summary workbook:
-    #   raw_data (all U1 customers of exiting CSPs)  MINUS  migrated_cases
+    # ── S5 dedup + cnp + liability via shared s5_reconciliation module ────
+    # Per Kapil (2026-07-17): one dedup formula everywhere. Route the live
+    # dashboard through the same compute_s5_snapshot() the cron uses so
+    # Tab 5's D0 uses device-ID dedup (matches the "How to Find Total
+    # Netbox Liability at a CSP" spec) — no more NAS vs Device-ID split
+    # producing a ±500 phantom delta.
+    #
+    # The shared module fetches T_DEVICE idle device IDs, mobile→device_id
+    # via ACTIVE_CUST + CUSTOMER_V_2 fallback, PX Migration raw/migrated,
+    # and does customer_side vs idle set arithmetic. Slower first load
+    # (~30s), then cached 5 min via metabase_query + other sub-caches.
     s5_dedup = {"duplicates": 0}
+    _shared_s5 = None
     if s5_all_codes and secrets["metabase_key"]:
-        # --- U2 pending pairs (unchanged) -----------------------------------
-        pending_pairs = []  # (mobile, partner_code_str)
-        for r in u2_rows:
-            partner = str(r.get("Partner") or "").strip()
-            mobile = r.get("Mobile no") or r.get("Mobile")
-            if not partner or not mobile: continue
-            if partner.lower() not in s5_all_lower: continue
-            if _u2_row_is_picked(r): continue
-            code = name_to_code.get(partner)
-            if not code: continue
-            pending_pairs.append((str(mobile).strip(), str(code)))
+        try:
+            from s5_reconciliation import (
+                compute_s5_snapshot,
+                PX_MIGRATION_WORKBOOK_ID as _PX_ID,
+            )
+            _px_creds = Credentials.from_service_account_info(
+                secrets["gcp_creds"],
+                scopes=["https://www.googleapis.com/auth/spreadsheets",
+                        "https://www.googleapis.com/auth/drive.readonly"],
+            )
+            _px_client = gspread.authorize(_px_creds)
+            _exit_book = _px_client.open_by_key(secrets["sheet_id"])
+            _px_book = _px_client.open_by_key(_PX_ID)
 
-        # --- U1 pending pairs from PX/CX Migration Summary workbook ---------
-        u1_raw_by_code, u1_migrated_rows = fetch_px_migration(secrets["gcp_creds"])
-        # Resolve migrated rows to partner_code via alias + name→code map
-        u1_migrated_by_code = defaultdict(set)
-        for nm_lc, mobile in u1_migrated_rows:
-            key = SHEET_NAME_ALIAS.get(nm_lc, nm_lc).lower()
-            code = name_to_code.get(key) or name_to_code.get(nm_lc)
-            if code:
-                u1_migrated_by_code[str(code)].add(mobile)
-        s5_codes_set = {str(c) for c in s5_all_codes}
-        for code, raw_mobiles in u1_raw_by_code.items():
-            if code not in s5_codes_set: continue
-            pending_u1 = raw_mobiles - u1_migrated_by_code.get(code, set())
-            for m in pending_u1:
-                pending_pairs.append((m, code))
+            def _mb_run(sql):
+                return metabase_query(
+                    secrets["metabase_url"], secrets["metabase_key"], sql
+                )["rows"]
 
-        # --- Lookup NAS + IDLE sets, count duplicates ----------------------
-        all_mobiles = list({m for m, _ in pending_pairs})
-        mobile_to_nas = fetch_mobile_to_nas(
-            secrets["metabase_url"], secrets["metabase_key"], all_mobiles,
-        ) if all_mobiles else {}
-        idle_nas_by_code = fetch_idle_nas_by_code(
-            secrets["metabase_url"], secrets["metabase_key"], s5_all_codes,
-        )
-        dup = 0
-        for mobile, code in pending_pairs:
-            nas = mobile_to_nas.get(mobile)
-            if not nas: continue
-            if nas in idle_nas_by_code.get(code, set()):
-                dup += 1
-        s5_dedup["duplicates"] = dup
+            _shared_s5 = compute_s5_snapshot(
+                sb_url=secrets["supabase_url"],
+                sb_key=secrets["supabase_key"],
+                requests_module=requests,
+                mb_query_fn=_mb_run,
+                exit_book=_exit_book,
+                px_book=_px_book,
+                verbose=False,
+            )
+            s5_dedup["duplicates"] = _shared_s5["s5_dedup"]
+        except Exception as _e:
+            st.warning(f"Shared S5 module failed, falling back to zero dedup: {_e}")
+            _shared_s5 = None
 
     # Title bar
     st.markdown(
@@ -2284,8 +2281,18 @@ def render():
     # No cron override on D0 (Kapil 2026-07-17). Every field on the dashboard
     # shows live-computed values. Cron rows in Daily Totals are used ONLY as
     # the D-1 baseline for Tab 5's delta column — never to overwrite D0.
-    # Everything (idle, CNP, liability, collected, migration, pickup) refreshes
-    # when the 5-min st.cache_data TTL expires or the user clicks Refresh.
+    #
+    # For S5 specifically, override the live values with the shared
+    # compute_s5_snapshot output (device-ID dedup) so live D0 uses the
+    # single authoritative dedup formula. Otherwise the inline NAS path
+    # would give a different cnp/liability than cron writes.
+    if _shared_s5 is not None:
+        today_metrics["s5_idle"] = _shared_s5["s5_idle"]
+        today_metrics["s6_idle"] = _shared_s5["s6_idle"]
+        today_metrics["s5_cnp_raw"] = _shared_s5["s5_cnp_raw"]
+        today_metrics["s5_dedup"] = _shared_s5["s5_dedup"]
+        today_metrics["s5_could_not_pick"] = _shared_s5["s5_could_not_pick"]
+        today_metrics["s5_liability"] = _shared_s5["s5_liability"]
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Status & Cohorts", "CSP Exit Funnel", "Data Quality", "Search",
