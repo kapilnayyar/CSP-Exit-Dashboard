@@ -1313,34 +1313,42 @@ def read_today_totals(book):
     return _read_totals_row_for_date(book, today)
 
 
-def read_latest_totals(book):
-    """Return the newest (latest-dated) Daily Totals row — used as the D-1
-    baseline for Tab 5's delta view under Kapil's 2026-07-18 rule:
-    cron writes at 01:30 IST; between 01:30 IST today and 01:30 IST
-    tomorrow, dashboard displays the completed business day's report as
-    D-1 and live values as D0. If today's cron already ran, latest =
-    today's row. If cron is delayed, latest = yesterday's row — no
-    'no data for yesterday' gap.
-    """
+def _read_totals_sorted(book):
+    """Return all Daily Totals rows sorted by date descending (newest first),
+    with values coerced to ints. Empty list if unavailable."""
     try:
         ws = book.worksheet(TOTALS_TAB)
     except Exception:
-        return {}
+        return []
     try:
         rows = _read_records_safe(ws)
     except Exception:
-        return {}
+        return []
     dated = [r for r in rows if str(r.get("date") or "").strip()]
-    if not dated:
-        return {}
-    latest = max(dated, key=lambda r: str(r.get("date") or ""))
-    out = {"date": str(latest.get("date") or "")}
-    for k in TOTALS_HEADERS[1:]:
-        try:
-            out[k] = int(float(latest.get(k) or 0))
-        except (TypeError, ValueError):
-            out[k] = 0
+    dated.sort(key=lambda r: str(r.get("date") or ""), reverse=True)
+    out = []
+    for r in dated:
+        row = {"date": str(r.get("date") or "")}
+        for k in TOTALS_HEADERS[1:]:
+            try:
+                row[k] = int(float(r.get(k) or 0))
+            except (TypeError, ValueError):
+                row[k] = 0
+        out.append(row)
     return out
+
+
+def read_latest_totals(book):
+    """The newest-dated Daily Totals row. Under Kapil's 2026-07-18 rule this
+    row is Tab 5's D0 — the just-completed business day's report."""
+    rows = _read_totals_sorted(book)
+    return rows[0] if rows else {}
+
+
+def read_previous_totals(book):
+    """The second-newest Daily Totals row — Tab 5's D-1 baseline."""
+    rows = _read_totals_sorted(book)
+    return rows[1] if len(rows) > 1 else {}
 
 
 def read_yesterday_totals(book):
@@ -1477,21 +1485,23 @@ def stage_card_with_delta(stage_label, color, rows):
     return html
 
 
-def render_tab5_funnel_with_delta(m, y, s5_freshness=None):
+def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str=""):
     """Tab 5 — same 7 stages as Tab 2, with D0 / D-1 / Delta columns.
-    m = today_metrics dict; y = yesterday_totals dict (empty if missing)."""
+    m = today_metrics dict; y = yesterday_totals dict (empty if missing).
+    report_date_str = the business-day date this report represents
+    (e.g. "17-Jul-2026"); falls back to today's calendar if empty."""
 
-    today_str = datetime.now(IST).strftime("%d-%b-%Y")
+    header_str = report_date_str or datetime.now(IST).strftime("%d-%b-%Y")
     has_y = bool(y)
 
     st.markdown(
         f'<div style="background:#1F4E78;color:#ffffff;padding:14px;border-radius:8px;'
         f'font-size:17px;font-weight:bold;text-align:center;margin-top:6px;margin-bottom:6px">'
-        f'CSP EXIT FUNNEL — DAILY DELTA — {today_str}</div>',
+        f'CSP EXIT FUNNEL — DAILY DELTA — {header_str}</div>',
         unsafe_allow_html=True,
     )
     if not has_y:
-        st.info("ℹ No data for yesterday yet in **Daily Totals** tab. Seed yesterday's row manually to enable D-1 and Delta columns. Today's row is auto-captured.")
+        st.info("ℹ No previous-day row available in **Daily Totals**. D-1 and Delta columns will populate once the second daily cron has run.")
 
     def yd(k):
         return y.get(k) if has_y else None
@@ -2298,32 +2308,41 @@ def render():
         # DO NOT write from dashboard — only cron writes S5 truth to Daily
         # Totals. See s5_reconciliation.py + capture_daily_snapshot.py.
         today_totals = read_today_totals(book)
-        # D-1 baseline = the LATEST available Daily Totals row (Kapil
-        # 2026-07-18). Cron writes at 01:30 IST; between 01:30 today and
-        # 01:30 tomorrow the latest row is today's calendar row (state at
-        # end of yesterday's business day). If cron is delayed, the
-        # latest is yesterday's row — no 'no data for yesterday' gap.
-        # D0 stays live so today's work shows up as the delta.
-        yest_totals = read_latest_totals(book)
+        # Kapil 2026-07-18: Dashboard shows the just-completed business-day
+        # report until the next cron fires at 01:30 IST. Cron writes the
+        # row dated with the current IST date at 01:30; that row's data =
+        # state at end of yesterday's business day (D+1 convention). So:
+        #   D0 = latest cron row (state at end of yesterday's business day)
+        #   D-1 = previous cron row (state at end of day-before-yesterday)
+        #   Report title = latest row date − 1 day (e.g. row 07-18 → "17-Jul")
+        _latest_totals = read_latest_totals(book)
+        _prev_totals = read_previous_totals(book)
+        yest_totals = _prev_totals
         s5_freshness = compute_s5_freshness(book)
     except Exception:
         pass
 
-    # No cron override on D0 (Kapil 2026-07-17). Every field on the dashboard
-    # shows live-computed values. Cron rows in Daily Totals are used ONLY as
-    # the D-1 baseline for Tab 5's delta column — never to overwrite D0.
-    #
-    # For S5 specifically, override the live values with the shared
-    # compute_s5_snapshot output (device-ID dedup) so live D0 uses the
-    # single authoritative dedup formula. Otherwise the inline NAS path
-    # would give a different cnp/liability than cron writes.
-    if _shared_s5 is not None:
-        today_metrics["s5_idle"] = _shared_s5["s5_idle"]
-        today_metrics["s6_idle"] = _shared_s5["s6_idle"]
-        today_metrics["s5_cnp_raw"] = _shared_s5["s5_cnp_raw"]
-        today_metrics["s5_dedup"] = _shared_s5["s5_dedup"]
-        today_metrics["s5_could_not_pick"] = _shared_s5["s5_could_not_pick"]
-        today_metrics["s5_liability"] = _shared_s5["s5_liability"]
+    # Kapil 2026-07-18: Tab 5 displays the latest COMPLETED business-day
+    # report until the next 01:30 IST cron fires. Every field in
+    # today_metrics is replaced with the latest cron row's values, so D0
+    # is static across the day and matches the report the team already
+    # signed off on. The live compute above is only used as a fallback
+    # if the cron row is missing.
+    if _latest_totals:
+        for k, v in _latest_totals.items():
+            if k == "date":
+                continue
+            today_metrics[k] = v
+
+    # Report date shown in Tab 5 header. Latest row is dated D+1 under
+    # the convention; the report itself is for D = latest_date − 1 day.
+    report_date_str = ""
+    if _latest_totals.get("date"):
+        try:
+            _row_d = datetime.strptime(_latest_totals["date"], "%Y-%m-%d").date()
+            report_date_str = (_row_d - timedelta(days=1)).strftime("%d-%b-%Y")
+        except ValueError:
+            report_date_str = _latest_totals["date"]
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Status & Cohorts", "CSP Exit Funnel", "Data Quality", "Search",
@@ -2341,7 +2360,8 @@ def render():
     with tab4:
         render_tab4_search(partners, u2_rows, secrets)
     with tab5:
-        render_tab5_funnel_with_delta(today_metrics, yest_totals)
+        render_tab5_funnel_with_delta(today_metrics, yest_totals,
+                                       report_date_str=report_date_str)
     with tab6:
         portal_pickups = fetch_portal_pickups(
             secrets.get("portal_url", ""),
