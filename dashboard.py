@@ -1688,7 +1688,7 @@ def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str=""):
 
     report_lines = [
         "@channel",
-        f"Please find the exit CSPs report as of today — {today_str}.",
+        f"Please find the exit CSPs report as of today — {header_str}.",
         "",
         "D0 means today's number, D-1 means yesterday's number, Delta shows what changed.",
         "",
