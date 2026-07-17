@@ -2281,42 +2281,11 @@ def render():
     except Exception:
         pass
 
-    # ── Cron overrides — narrow scope (2026-07-06 refinement). ──
-    # The 2026-07-03 rewrite made cron the source of truth for ALL S5 fields
-    # to stop the ±7 phantom-drift from single-shot NAS flicker. That fix
-    # over-corrected: when a partner moves S4→S5 intraday, live s5_csps
-    # updates but the frozen idle/liability stay stale, producing a
-    # roster-vs-liability mismatch (2026-07-06, 60 CSPs moved from S4→S5
-    # and only the CSP count updated — Kapil flagged this).
-    #
-    # Narrow the override to the truly flicker-prone fields only:
-    #   s5_could_not_pick, s5_dedup   — depend on 5-pass NAS union
-    #   s5_collected, s6_collected    — sheet aggregates (cron is truth here too)
-    # Let s5_idle / s5_liability / s6_idle remain LIVE so intraday roster
-    # changes show up immediately. Recompute liability = live_idle +
-    # cron_cnp so cnp stays authoritative but the CSP-count delta lands
-    # in liability.
-    #
-    # Override reads TODAY's row (cron's fresh snapshot of these fields).
-    # Delta baseline (D-1) reads YESTERDAY's row separately — that's what
-    # gives Tab 5 the "since yesterday" comparison. Prior code confused
-    # the two, causing D0==D-1 → zero delta on every field.
-    # Cron override — narrow scope. s5_collected + s6_collected removed
-    # 2026-07-17 (Kapil): those come from the "S5 Netbox Collection" sheet
-    # tab which he edits throughout the day and wants reflected live on the
-    # dashboard, not frozen at the last cron capture. compute_today_metrics
-    # already produces both from fetch_netbox_collection() (live read).
-    for k in ("s5_could_not_pick",):
-        if today_totals.get(k) is not None:
-            today_metrics[k] = today_totals[k]
-    if today_totals.get("s5_dedup") is not None:
-        s5_dedup = {"duplicates": today_totals["s5_dedup"]}
-    # Recompute liability off live idle + cron cnp
-    if today_metrics.get("s5_could_not_pick") is not None \
-            and today_metrics.get("s5_idle") is not None:
-        today_metrics["s5_liability"] = (
-            today_metrics["s5_idle"] + today_metrics["s5_could_not_pick"]
-        )
+    # No cron override on D0 (Kapil 2026-07-17). Every field on the dashboard
+    # shows live-computed values. Cron rows in Daily Totals are used ONLY as
+    # the D-1 baseline for Tab 5's delta column — never to overwrite D0.
+    # Everything (idle, CNP, liability, collected, migration, pickup) refreshes
+    # when the 5-min st.cache_data TTL expires or the user clicks Refresh.
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Status & Cohorts", "CSP Exit Funnel", "Data Quality", "Search",
