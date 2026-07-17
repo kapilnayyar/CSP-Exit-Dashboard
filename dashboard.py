@@ -2301,7 +2301,12 @@ def render():
     # Delta baseline (D-1) reads YESTERDAY's row separately — that's what
     # gives Tab 5 the "since yesterday" comparison. Prior code confused
     # the two, causing D0==D-1 → zero delta on every field.
-    for k in ("s5_could_not_pick", "s5_collected", "s6_collected"):
+    # Cron override — narrow scope. s5_collected + s6_collected removed
+    # 2026-07-17 (Kapil): those come from the "S5 Netbox Collection" sheet
+    # tab which he edits throughout the day and wants reflected live on the
+    # dashboard, not frozen at the last cron capture. compute_today_metrics
+    # already produces both from fetch_netbox_collection() (live read).
+    for k in ("s5_could_not_pick",):
         if today_totals.get(k) is not None:
             today_metrics[k] = today_totals[k]
     if today_totals.get("s5_dedup") is not None:
