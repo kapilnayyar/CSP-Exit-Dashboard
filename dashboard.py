@@ -1313,6 +1313,36 @@ def read_today_totals(book):
     return _read_totals_row_for_date(book, today)
 
 
+def read_latest_totals(book):
+    """Return the newest (latest-dated) Daily Totals row — used as the D-1
+    baseline for Tab 5's delta view under Kapil's 2026-07-18 rule:
+    cron writes at 01:30 IST; between 01:30 IST today and 01:30 IST
+    tomorrow, dashboard displays the completed business day's report as
+    D-1 and live values as D0. If today's cron already ran, latest =
+    today's row. If cron is delayed, latest = yesterday's row — no
+    'no data for yesterday' gap.
+    """
+    try:
+        ws = book.worksheet(TOTALS_TAB)
+    except Exception:
+        return {}
+    try:
+        rows = _read_records_safe(ws)
+    except Exception:
+        return {}
+    dated = [r for r in rows if str(r.get("date") or "").strip()]
+    if not dated:
+        return {}
+    latest = max(dated, key=lambda r: str(r.get("date") or ""))
+    out = {"date": str(latest.get("date") or "")}
+    for k in TOTALS_HEADERS[1:]:
+        try:
+            out[k] = int(float(latest.get(k) or 0))
+        except (TypeError, ValueError):
+            out[k] = 0
+    return out
+
+
 def read_yesterday_totals(book):
     """Return yesterday's Daily Totals row — the D-1 baseline for Tab 5's
     delta view. Yesterday's row represents state at yesterday's snapshot;
@@ -2268,12 +2298,13 @@ def render():
         # DO NOT write from dashboard — only cron writes S5 truth to Daily
         # Totals. See s5_reconciliation.py + capture_daily_snapshot.py.
         today_totals = read_today_totals(book)
-        # Under Kapil's D+1 report convention (2026-07-14): the row dated
-        # calendar-today represents state at end of YESTERDAY (that's
-        # yesterday's report D0). So dashboard's D-1 baseline for Tab 5
-        # delta = today's calendar row (same as today_totals). Live D0
-        # minus this baseline = today's in-progress work.
-        yest_totals = today_totals
+        # D-1 baseline = the LATEST available Daily Totals row (Kapil
+        # 2026-07-18). Cron writes at 01:30 IST; between 01:30 today and
+        # 01:30 tomorrow the latest row is today's calendar row (state at
+        # end of yesterday's business day). If cron is delayed, the
+        # latest is yesterday's row — no 'no data for yesterday' gap.
+        # D0 stays live so today's work shows up as the delta.
+        yest_totals = read_latest_totals(book)
         s5_freshness = compute_s5_freshness(book)
     except Exception:
         pass
