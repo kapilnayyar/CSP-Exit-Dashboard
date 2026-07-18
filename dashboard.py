@@ -2344,6 +2344,39 @@ def render():
         except ValueError:
             report_date_str = _latest_totals["date"]
 
+    # ── Cron heartbeat: warn if today's cron missed all 3 scheduled slots ──
+    # GH Actions `schedule:` sometimes silently drops runs. The workflow now
+    # has 3 fallback slots (01:30, 02:00, 02:30 IST) but they can all miss
+    # during a bad GH day. If the latest Daily Totals row is not today's
+    # IST date AND we're past 02:45 IST (all slots have had time to fire
+    # and complete a ~2-min run), show a red banner so Kapil knows the
+    # numbers on-screen are yesterday's, not today's.
+    _now_ist = datetime.now(IST)
+    _today_ist_str = _now_ist.strftime("%Y-%m-%d")
+    _past_last_slot = (_now_ist.hour, _now_ist.minute) >= (2, 45)
+    _latest_row_date = (_latest_totals or {}).get("date", "")
+    if _past_last_slot and _latest_row_date and _latest_row_date < _today_ist_str:
+        _try_snap_url = (
+            "https://github.com/kapilnayyar/CSP-Exit-Dashboard/"
+            "actions/workflows/daily_snapshot.yml"
+        )
+        st.markdown(
+            f"""
+            <div style="background:#3B0A0A; border-left:4px solid #C42B1C;
+                        padding:10px 14px; margin:8px 0 4px 0; color:#FFD6D6;
+                        border-radius:4px; font-family:Arial, sans-serif;">
+              <b>⚠ Cron missed today's 01:30 IST slot (and both fallbacks).</b>
+              &nbsp;Latest Daily Totals row is dated <b>{_latest_row_date}</b>
+              — numbers below are from yesterday's business day.
+              &nbsp;<a href="{_try_snap_url}" target="_blank"
+                       style="color:#FFA0A0; text-decoration:underline;">
+                Trigger snapshot manually →
+              </a>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Status & Cohorts", "CSP Exit Funnel", "Data Quality", "Search",
         "Daily Funnel + Delta", "99 CSP Exit Funnel",

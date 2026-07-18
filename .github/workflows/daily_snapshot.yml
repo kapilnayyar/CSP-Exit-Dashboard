@@ -8,9 +8,23 @@ name: Daily Snapshot (01:30 IST)
 # Row date labelling stays as calendar IST date of the cron run: a row
 # dated 2026-07-15 captured at 01:30 IST on 15-Jul contains state at end
 # of business day 14-Jul (matches Kapil's D+1 report convention).
+#
+# GH Actions `schedule:` is best-effort on free tier and silently drops
+# runs during high-load windows (happened on 18-Jul-2026 and 19-Jul-2026,
+# leaving the dashboard stuck on the prior day's report). We add three
+# fallback slots 30 min apart. capture_daily_snapshot.py already handles
+# same-day re-runs idempotently: it detects the existing row and
+# overwrites it in place with fresh values (see line ~260, "Row for
+# {today_str} already exists ... will overwrite"). So if the 20:00 UTC
+# run fires, the 20:30 and 21:00 runs simply refresh the same row with
+# slightly newer numbers. If 20:00 misses, 20:30 catches; if 20:30 also
+# misses, 21:00 catches. Very small runtime cost (~2 min/run) for a
+# large reliability gain.
 on:
   schedule:
-    - cron: "0 20 * * *"
+    - cron: "0 20 * * *"    # 01:30 IST - primary
+    - cron: "30 20 * * *"   # 02:00 IST - fallback #1
+    - cron: "0 21 * * *"    # 02:30 IST - fallback #2
   workflow_dispatch:  # also allow manual trigger from GitHub UI
 
 jobs:
