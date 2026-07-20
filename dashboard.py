@@ -2334,13 +2334,21 @@ def render():
                 continue
             today_metrics[k] = v
 
-    # Report date shown in Tab 5 header. Latest row is dated D+1 under
-    # the convention; the report itself is for D = latest_date − 1 day.
+    # Report date shown in Tab 5 header.
+    # Kapil 2026-07-20: Dashboard header = the date the latest cron row was
+    # captured on (i.e. the row's own date), not (row date − 1). Rationale:
+    # the dashboard is a "today view" — when you open it today, you expect
+    # today's date in the header. The row 07-20 captured at 01:30 IST 20-Jul
+    # is the "20-Jul dashboard state," even though the underlying business
+    # numbers describe the tail end of 19-Jul.
+    # (The separate daily HTML report script still uses D+1 → labels 07-20
+    # data as "19-Jul-2026 report" — that's a looking-back retrospective,
+    # a different question from the live dashboard.)
     report_date_str = ""
     if _latest_totals.get("date"):
         try:
             _row_d = datetime.strptime(_latest_totals["date"], "%Y-%m-%d").date()
-            report_date_str = (_row_d - timedelta(days=1)).strftime("%d-%b-%Y")
+            report_date_str = _row_d.strftime("%d-%b-%Y")
         except ValueError:
             report_date_str = _latest_totals["date"]
 
