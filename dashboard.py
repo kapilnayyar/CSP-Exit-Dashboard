@@ -2551,6 +2551,6 @@ with col_logout:
         st.rerun()
 
 # Auto-refresh every 30 seconds
-st_autorefresh(interval=300000)  # 5 minutes
+st_autorefresh(interval=300000, key="auto_refresh_5min")  # 5 minutes
 
 render()
