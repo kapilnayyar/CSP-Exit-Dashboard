@@ -2328,6 +2328,20 @@ def render():
     # pickups, added userbase) from ever reaching the dashboard — reverted.
     # `today_metrics` (computed above via compute_today_metrics) stands as
     # the D0 for the funnel.
+    #
+    # EXCEPTION — S5 dedup/cnp/liability: compute_today_metrics uses a
+    # count-based formula ((u1_total-u1_mig)+(u2_total-u2_picked) - dedup)
+    # while s5_reconciliation.compute_s5_snapshot uses a set-based
+    # customer_only-device-id formula. The two disagree by ~290. Kapil's
+    # rule: "use 1 dedup for everything, no different formulae." So we
+    # override the four S5 fields with values from _shared_s5 (the same
+    # numbers the cron writes to Daily Totals — no dashboard/cron drift).
+    # Every other field (userbase, pickups, migration, etc.) stays live.
+    if _shared_s5:
+        today_metrics["s5_idle"] = _shared_s5["s5_idle"]
+        today_metrics["s5_could_not_pick"] = _shared_s5["s5_could_not_pick"]
+        today_metrics["s5_liability"] = _shared_s5["s5_liability"]
+        today_metrics["s6_idle"] = _shared_s5["s6_idle"]
 
     # Business day per Kapil's 01:30 IST cutoff: capture/edits before 01:30
     # IST count as PREVIOUS calendar day's business day; at/after 01:30 IST
