@@ -2322,44 +2322,38 @@ def render():
     except Exception:
         pass
 
-    # Kapil 2026-07-18: Tab 5 displays the latest COMPLETED business-day
-    # report until the next 01:30 IST cron fires. Every field in
-    # today_metrics is replaced with the latest cron row's values, so D0
-    # is static across the day and matches the report the team already
-    # signed off on. The live compute above is only used as a fallback
-    # if the cron row is missing.
-    if _latest_totals:
-        for k, v in _latest_totals.items():
-            if k == "date":
-                continue
-            today_metrics[k] = v
+    # Kapil 2026-07-21: Tab 5 D0 = LIVE compute (source of truth), cron rows
+    # are used ONLY as the D-1 baseline for delta. The prior override that
+    # copied _latest_totals into today_metrics blocked live edits (new
+    # pickups, added userbase) from ever reaching the dashboard — reverted.
+    # `today_metrics` (computed above via compute_today_metrics) stands as
+    # the D0 for the funnel.
 
-    # Report date shown in Tab 5 header.
-    # Kapil 2026-07-20: Dashboard header = the date the latest cron row was
-    # captured on (i.e. the row's own date), not (row date − 1). Rationale:
-    # the dashboard is a "today view" — when you open it today, you expect
-    # today's date in the header. The row 07-20 captured at 01:30 IST 20-Jul
-    # is the "20-Jul dashboard state," even though the underlying business
-    # numbers describe the tail end of 19-Jul.
-    # (The separate daily HTML report script still uses D+1 → labels 07-20
-    # data as "19-Jul-2026 report" — that's a looking-back retrospective,
-    # a different question from the live dashboard.)
-    report_date_str = ""
-    if _latest_totals.get("date"):
-        try:
-            _row_d = datetime.strptime(_latest_totals["date"], "%Y-%m-%d").date()
-            report_date_str = _row_d.strftime("%d-%b-%Y")
-        except ValueError:
-            report_date_str = _latest_totals["date"]
-
-    # ── Cron heartbeat: warn if today's cron missed all 3 scheduled slots ──
-    # GH Actions `schedule:` sometimes silently drops runs. The workflow now
-    # has 3 fallback slots (01:30, 02:00, 02:30 IST) but they can all miss
-    # during a bad GH day. If the latest Daily Totals row is not today's
-    # IST date AND we're past 02:45 IST (all slots have had time to fire
-    # and complete a ~2-min run), show a red banner so Kapil knows the
-    # numbers on-screen are yesterday's, not today's.
+    # Business day per Kapil's 01:30 IST cutoff: capture/edits before 01:30
+    # IST count as PREVIOUS calendar day's business day; at/after 01:30 IST
+    # count as current calendar day.
     _now_ist = datetime.now(IST)
+    _business_day = _now_ist.date()
+    if (_now_ist.hour, _now_ist.minute) < (1, 30):
+        _business_day = _business_day - timedelta(days=1)
+    _prev_business_day = _business_day - timedelta(days=1)
+    report_date_str = _business_day.strftime("%d-%b-%Y")
+
+    # D-1 baseline = the Daily Totals row whose date == (current business
+    # day − 1 day). This makes the delta reflect "movement since end of
+    # yesterday's business day", independent of when the latest cron row
+    # was labeled. If no row for that date exists, fall back to whatever
+    # `read_previous_totals` returned above.
+    _prev_dstr = _prev_business_day.strftime("%Y-%m-%d")
+    _all_rows_sorted = _read_totals_sorted(book) if _latest_totals else []
+    _baseline = next((r for r in _all_rows_sorted if r.get("date") == _prev_dstr), {})
+    if _baseline:
+        yest_totals = _baseline
+
+    # ── Cron heartbeat: warn if today's business-day cron row is missing ──
+    # A row for the current business day should exist by 02:45 IST (after
+    # all cron slots have fired). If not, show a red banner so Kapil knows
+    # the D-1 baseline may be reading the wrong row.
     _today_ist_str = _now_ist.strftime("%Y-%m-%d")
     _past_last_slot = (_now_ist.hour, _now_ist.minute) >= (2, 45)
     _latest_row_date = (_latest_totals or {}).get("date", "")
