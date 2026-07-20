@@ -11,21 +11,30 @@ name: Daily Snapshot (01:30 IST)
 #
 # GH Actions `schedule:` is best-effort on free tier and silently drops
 # runs during high-load windows (happened on 18-Jul-2026 and 19-Jul-2026,
-# leaving the dashboard stuck on the prior day's report). We add three
-# fallback slots 30 min apart. capture_daily_snapshot.py already handles
-# same-day re-runs idempotently: it detects the existing row and
-# overwrites it in place with fresh values (see line ~260, "Row for
-# {today_str} already exists ... will overwrite"). So if the 20:00 UTC
-# run fires, the 20:30 and 21:00 runs simply refresh the same row with
-# slightly newer numbers. If 20:00 misses, 20:30 catches; if 20:30 also
-# misses, 21:00 catches. Very small runtime cost (~2 min/run) for a
-# large reliability gain.
+# leaving the dashboard stuck on the prior day's report). We add one
+# fallback slot 30 min after the primary. capture_daily_snapshot.py
+# already handles same-day re-runs idempotently: it detects the
+# existing row and overwrites it in place with fresh values (see
+# line ~260, "Row for {today_str} already exists ... will overwrite").
+# So if 20:00 UTC fires, 20:30 UTC just refreshes the same row.
+# If 20:00 misses, 20:30 catches. Two slots is plenty of resilience —
+# a 3rd slot (kept briefly on 20-Jul-2026) tended to trip Google
+# Sheets / Metabase rate limits and generated spurious failure emails
+# after the row was already correctly written.
 on:
   schedule:
     - cron: "0 20 * * *"    # 01:30 IST - primary
-    - cron: "30 20 * * *"   # 02:00 IST - fallback #1
-    - cron: "0 21 * * *"    # 02:30 IST - fallback #2
+    - cron: "30 20 * * *"   # 02:00 IST - fallback
   workflow_dispatch:  # also allow manual trigger from GitHub UI
+
+# Prevent the fallback slot from racing the primary if it happens to
+# start while the primary is still finishing. If a run is already
+# in-progress, the new one queues and starts only after the previous
+# completes; the idempotent overwrite in capture_daily_snapshot.py
+# then just refreshes the same row cleanly.
+concurrency:
+  group: daily-snapshot
+  cancel-in-progress: false
 
 jobs:
   snapshot:
