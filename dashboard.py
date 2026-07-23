@@ -2350,17 +2350,23 @@ def render():
     _business_day = _now_ist.date()
     if (_now_ist.hour, _now_ist.minute) < (1, 30):
         _business_day = _business_day - timedelta(days=1)
-    _prev_business_day = _business_day - timedelta(days=1)
-    report_date_str = _business_day.strftime("%d-%b-%Y")
 
-    # D-1 baseline = the Daily Totals row whose date == (current business
-    # day − 1 day). This makes the delta reflect "movement since end of
-    # yesterday's business day", independent of when the latest cron row
-    # was labeled. If no row for that date exists, fall back to whatever
-    # `read_previous_totals` returned above.
-    _prev_dstr = _prev_business_day.strftime("%Y-%m-%d")
+    # Kapil 2026-07-23: Tab 5 shows YESTERDAY'S completed report (D+1
+    # convention). Header = business day − 1 day. Delta rows:
+    #   D0  = state at end of yesterday's business day (= live compute now,
+    #         which matches row 07-{business_day} under D+1 as long as
+    #         no work has been posted for today yet)
+    #   D-1 = state at end of day-before-yesterday (= row 07-{business_day − 1})
+    _report_day = _business_day - timedelta(days=1)
+    _baseline_day = _business_day - timedelta(days=2)
+    report_date_str = _report_day.strftime("%d-%b-%Y")
+
+    # D-1 baseline = the Daily Totals row whose date == (business_day − 1).
+    # Under D+1 that row holds "day-before-yesterday EOD" state, which is
+    # the right baseline for a delta labeled "yesterday's work".
+    _base_dstr = (_business_day - timedelta(days=1)).strftime("%Y-%m-%d")
     _all_rows_sorted = _read_totals_sorted(book) if _latest_totals else []
-    _baseline = next((r for r in _all_rows_sorted if r.get("date") == _prev_dstr), {})
+    _baseline = next((r for r in _all_rows_sorted if r.get("date") == _base_dstr), {})
     if _baseline:
         yest_totals = _baseline
 
