@@ -2351,20 +2351,19 @@ def render():
     if (_now_ist.hour, _now_ist.minute) < (1, 30):
         _business_day = _business_day - timedelta(days=1)
 
-    # Kapil 2026-07-23: Tab 5 shows YESTERDAY'S completed report (D+1
-    # convention). Header = business day − 1 day. Delta rows:
-    #   D0  = state at end of yesterday's business day (= live compute now,
-    #         which matches row 07-{business_day} under D+1 as long as
-    #         no work has been posted for today yet)
-    #   D-1 = state at end of day-before-yesterday (= row 07-{business_day − 1})
-    _report_day = _business_day - timedelta(days=1)
-    _baseline_day = _business_day - timedelta(days=2)
-    report_date_str = _report_day.strftime("%d-%b-%Y")
+    # Kapil 2026-07-23: Tab 5 shows TODAY'S in-progress dashboard under
+    # D+1 (row 07-N holds state at end of day N-1). So:
+    #   header = today (business_day)
+    #   D0  = live compute (current in-progress state)
+    #   D-1 = row 07-{business_day} = yesterday's EOD state under D+1
+    # When no work has been posted for today, live == D-1 == yesterday's
+    # EOD, so all deltas read 0 — which is correct.
+    report_date_str = _business_day.strftime("%d-%b-%Y")
 
-    # D-1 baseline = the Daily Totals row whose date == (business_day − 1).
-    # Under D+1 that row holds "day-before-yesterday EOD" state, which is
-    # the right baseline for a delta labeled "yesterday's work".
-    _base_dstr = (_business_day - timedelta(days=1)).strftime("%Y-%m-%d")
+    # D-1 baseline = the Daily Totals row whose date == today's business
+    # day. Under D+1 that row is the "yesterday EOD" snapshot the cron
+    # wrote at ~01:30 IST this morning.
+    _base_dstr = _business_day.strftime("%Y-%m-%d")
     _all_rows_sorted = _read_totals_sorted(book) if _latest_totals else []
     _baseline = next((r for r in _all_rows_sorted if r.get("date") == _base_dstr), {})
     if _baseline:
