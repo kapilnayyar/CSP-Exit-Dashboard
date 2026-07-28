@@ -2423,6 +2423,11 @@ def render():
     today_totals = {}   # today's cron row — authoritative for cnp/dedup
     yest_totals = {}    # yesterday's cron row — D-1 baseline for delta
     s5_freshness = None  # (hours_ago, status_word)
+    # Always-defined so downstream logic (biz-day baseline lookup) doesn't
+    # NameError even if the try block below fails partway.
+    book = None
+    _latest_totals = {}
+    _prev_totals = {}
     try:
         _creds = Credentials.from_service_account_info(
             secrets["gcp_creds"],
@@ -2440,8 +2445,8 @@ def render():
         #   D0 = latest cron row (state at end of yesterday's business day)
         #   D-1 = previous cron row (state at end of day-before-yesterday)
         #   Report title = latest row date − 1 day (e.g. row 07-18 → "17-Jul")
-        _latest_totals = read_latest_totals(book)
-        _prev_totals = read_previous_totals(book)
+        _latest_totals = read_latest_totals(book) or {}
+        _prev_totals = read_previous_totals(book) or {}
         yest_totals = _prev_totals
         s5_freshness = compute_s5_freshness(book)
     except Exception:
@@ -2488,9 +2493,19 @@ def render():
     # D-1 baseline = the Daily Totals row whose date == today's business
     # day. Under D+1 that row is the "yesterday EOD" snapshot the cron
     # wrote at ~01:30 IST this morning.
+    # Fallback chain (never leave yest_totals empty if ANY row exists):
+    #   1. Row dated == business_day (ideal)
+    #   2. Row dated == business_day − 1  (cron missed today; use most recent EOD)
+    #   3. Newest row available (last-ditch — dashboard still shows values)
+    #   4. Keep _prev_totals from the initial fetch (already assigned above)
     _base_dstr = _business_day.strftime("%Y-%m-%d")
-    _all_rows_sorted = _read_totals_sorted(book) if _latest_totals else []
-    _baseline = next((r for r in _all_rows_sorted if r.get("date") == _base_dstr), {})
+    _base_dstr_alt = (_business_day - timedelta(days=1)).strftime("%Y-%m-%d")
+    _all_rows_sorted = _read_totals_sorted(book) if book is not None else []
+    _baseline = (
+        next((r for r in _all_rows_sorted if r.get("date") == _base_dstr), None)
+        or next((r for r in _all_rows_sorted if r.get("date") == _base_dstr_alt), None)
+        or (_all_rows_sorted[0] if _all_rows_sorted else None)
+    )
     if _baseline:
         yest_totals = _baseline
 
