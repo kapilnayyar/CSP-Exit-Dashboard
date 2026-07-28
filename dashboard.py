@@ -1030,6 +1030,110 @@ def render_tab1_status(u1, u2):
 # FUNNEL HELPERS — sheet lookups by partner name
 # ─────────────────────────────────────────────────────────────────────────────
 
+@st.cache_data(ttl=300)
+def compute_u1_u2_dedup_by_key(gcp_creds, u2_rows_serialized, name_to_code):
+    """Kapil 2026-07-28: dedup U1 vs U2 in the dashboard.
+
+    If a mobile is both a U1 (in PX Migration Raw Data with type='U1') and
+    a U2 (in the Main sheet), it currently gets counted in BOTH userbase
+    columns — inflating totals. Rule per Kapil: keep in U2, remove from U1.
+
+    Approach:
+      1. Load PX Raw Data (customer_number, type, exit_partner_code,
+         Migration Status).
+      2. Build U2 mobile set per exit_partner_code from u2_rows (via
+         name_to_code lookup).
+      3. For each partner_code, find U1 mobiles in Raw Data that are ALSO
+         in U2 → dedup count. Also count by Migration Status so we
+         subtract from each subfield proportionally accurate.
+
+    Returns:
+      dedup_by_key: {lowercased_partner_name: {"total": n, "migrated": n,
+                                                "not_migrated": n, "wip": n}}
+      total_dupes_found: int (for optional logging)
+    """
+    from collections import defaultdict as _dd
+    creds = Credentials.from_service_account_info(
+        gcp_creds,
+        scopes=["https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive.readonly"],
+    )
+    try:
+        book = gspread.authorize(creds).open_by_key(PX_MIGRATION_WORKBOOK_ID)
+        raw = book.worksheet(PX_RAW_TAB).get_all_values()
+    except Exception:
+        return {}, 0
+    if not raw:
+        return {}, 0
+    hdr = [h.strip() for h in raw[0]]
+    # First blank column stops header — defeats trailing pivot block
+    last = next((i for i, h in enumerate(hdr) if not h), len(hdr))
+    hdr = hdr[:last]
+    try:
+        c_mob = hdr.index("customer_number")
+        c_type = hdr.index("type")
+        c_code = hdr.index("exit_partner_code")
+    except ValueError:
+        return {}, 0
+    c_status = hdr.index("Migration Status") if "Migration Status" in hdr else None
+
+    def _n(s):
+        if s is None: return ""
+        s = str(s).strip().replace(" ", "").replace("-", "")
+        if s.endswith(".0"): s = s[:-2]
+        if s.startswith("+91"): s = s[3:]
+        elif s.startswith("91") and len(s) == 12: s = s[2:]
+        elif s.startswith("0"): s = s.lstrip("0")
+        return s
+
+    # U1 mobiles per partner_code with status
+    u1_by_code = _dd(dict)  # code -> {mobile: status}
+    for row in raw[1:]:
+        if len(row) < last: continue
+        if row[c_type] != "U1": continue
+        m = _n(row[c_mob]); code = str(row[c_code]).strip()
+        if m and code:
+            status = str(row[c_status]).strip().lower() if c_status is not None else ""
+            u1_by_code[code][m] = status
+
+    # U2 mobiles per partner_code (via name -> code lookup)
+    name_to_code_lower = {n.lower(): str(c) for n, c in name_to_code.items()}
+    u2_by_code = _dd(set)
+    for r in u2_rows_serialized:
+        name = str(r.get("Partner") or "").strip().lower()
+        # Apply alias to match dashboard's key convention
+        alias = SHEET_NAME_ALIAS.get(name, "").lower() if name in SHEET_NAME_ALIAS else name
+        code = name_to_code_lower.get(alias)
+        mob = _n(r.get("Mobile no") or r.get("Mobile"))
+        if code and mob:
+            u2_by_code[code].add(mob)
+
+    # Compute dedup per partner
+    dedup_by_key = {}
+    total_dupes = 0
+    code_to_name = {str(c): n for n, c in name_to_code.items()}
+    for code, u1_map in u1_by_code.items():
+        u2_mobs = u2_by_code.get(code, set())
+        if not u2_mobs: continue
+        overlap_mobs = set(u1_map.keys()) & u2_mobs
+        if not overlap_mobs: continue
+        n_total = len(overlap_mobs)
+        n_mig = sum(1 for m in overlap_mobs if u1_map[m] == "done")
+        n_notm = sum(1 for m in overlap_mobs
+                     if u1_map[m] in ("not migrated", "not_migrated"))
+        n_wip = sum(1 for m in overlap_mobs
+                    if u1_map[m] in ("wip", "migration in process",
+                                     "in process", "in_progress"))
+        name = code_to_name.get(code)
+        if not name: continue
+        key = name.lower()
+        key = SHEET_NAME_ALIAS.get(key, name).lower() if key in SHEET_NAME_ALIAS else key
+        dedup_by_key[key] = {"total": n_total, "migrated": n_mig,
+                             "not_migrated": n_notm, "wip": n_wip}
+        total_dupes += n_total
+    return dedup_by_key, total_dupes
+
+
 def build_sheet_lookups(u1_rows, u2_rows):
     """Return per-partner U1/U2 metrics from Google Sheet, keyed by lowercased name."""
     u1_by = {}
@@ -2201,6 +2305,27 @@ def render():
     s5_all_codes = [code_of(p) for p in partners if p["current_state"] == "S5"]
     s5_all_lower = {p["name"].lower() for p in partners if p["current_state"] == "S5"}
     name_to_code = {p["name"]: code_of(p) for p in partners if code_of(p)}
+
+    # Kapil 2026-07-28: dedup mobiles that appear in BOTH U1 (PX Migration
+    # Raw Data, type='U1') and U2 (Main sheet). Rule: keep in U2, remove
+    # from U1. Applied in-memory to u1_by so the fix reaches every tab
+    # without touching the Migration Data sheet.
+    try:
+        _dedup_by_key, _n_dupes = compute_u1_u2_dedup_by_key(
+            secrets["gcp_creds"], u2_rows, name_to_code,
+        )
+        if _dedup_by_key:
+            for _key, _sub in _dedup_by_key.items():
+                if _key in u1_by:
+                    u1_by[_key] = {
+                        "total": max(0, u1_by[_key].get("total", 0) - _sub["total"]),
+                        "migrated": max(0, u1_by[_key].get("migrated", 0) - _sub["migrated"]),
+                        "not_migrated": max(0,
+                            u1_by[_key].get("not_migrated", 0) - _sub["not_migrated"]),
+                        "wip": max(0, u1_by[_key].get("wip", 0) - _sub["wip"]),
+                    }
+    except Exception:
+        pass  # non-critical enrichment — never block the dashboard
 
     # Fetch R15 for ALL partners in exit pipeline (so S1 has a userbase denominator)
     r15_by_code = fetch_r15_active_by_code(
