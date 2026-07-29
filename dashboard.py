@@ -1227,16 +1227,16 @@ def _compute_shifted_by_key(gcp_creds, u2_rows_serialized, name_to_code):
         m = _n(r.get("Mobile no") or r.get("Mobile"))
         if m: u2_all.add(m)
 
-    # Kapil 2026-07-30: count EACH SHIFTED MOBILE ONCE (unique-mobile level,
-    # not per-PX-Raw-partner). If a mobile is in PX Raw as U1 under multiple
-    # partners AND is in Main sheet, it counts as 1 shift, attributed to the
-    # FIRST PX Raw partner encountered. Ensures the sum across all partners
-    # equals the count of unique shifted mobiles (~2,848).
+    # Kapil 2026-07-30 (option B): shifted = mobiles in Main sheet that
+    # have ANY record in PX Raw (any type). Rule per Kapil: "U1 data in
+    # U2 where we have data in the raw sheet" — so any PX Raw presence
+    # verifies the shift, not just type=U1. Sum equals unique shifted
+    # mobile count (~2,848). First-occurrence attribution to a PX Raw
+    # partner.
     seen_mob = set()
     shifted_by_key = {}
     for row in raw[1:]:
         if len(row) < last: continue
-        if row[c_type] != "U1": continue
         m = _n(row[c_mob])
         pname = str(row[c_epn]).strip().lower()
         if not m or not pname: continue
