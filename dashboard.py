@@ -1398,6 +1398,25 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
         s = sheet_ub(p)
         return s if s > 0 else r15_of(p)
 
+    def _cohort_userbase(cohort):
+        """Kapil 2026-07-30 (final): compute userbase at the COHORT level,
+        not per-partner. Formula:
+            max(0, sum(MD_U1) − sum(shifted)) + sum(U2 pairs) + fallback R15
+        Per-partner sum would under-subtract because max(0, …) clamps
+        excess shifted for small partners. Cohort-level subtraction matches
+        Kapil's rule: 3,581 − 2,848 + 9,711 = 10,444.
+        """
+        md_u1 = sum((u1_by.get(p["name"].lower(), {}).get("total", 0) or 0)
+                    for p in cohort)
+        shifted = sum(shifted_by_key.get(p["name"].lower(), 0) for p in cohort)
+        u2 = sum((u2_total.get(p["name"].lower(), 0) or 0) for p in cohort)
+        fallback_r15 = sum(
+            r15_of(p) for p in cohort
+            if (u1_by.get(p["name"].lower(), {}).get("total", 0) or 0) == 0
+            and (u2_total.get(p["name"].lower(), 0) or 0) == 0
+        )
+        return max(0, md_u1 - shifted) + u2 + fallback_r15
+
     in_pipeline = [p for p in partners if p.get("current_state") in ("S1","S2","S3","S4","S5","S6")]
     current_s2 = by_state.get("S2", [])
     past_s3 = [p for p in in_pipeline if p["current_state"] in ("S3","S4","S5","S6")]
@@ -1408,16 +1427,17 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
 
     # S1 sums (with exit_type breakdown)
     s1_csps = len(in_pipeline)
-    s1_userbase = sum(ub_of(p) for p in in_pipeline)
+    # Cohort-level userbase (per Kapil's rule) — matches 10,444 baseline
+    s1_userbase = _cohort_userbase(in_pipeline)
     s1_voluntary = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "Voluntary")
     s1_b1 = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "B1")
     s1_b2 = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "B2")
 
     # S2/S3
     s2_csps = len(current_s2)
-    s2_userbase = sum(ub_of(p) for p in current_s2)
+    s2_userbase = _cohort_userbase(current_s2)
     s3_csps = len(past_s3)
-    s3_userbase = sum(ub_of(p) for p in past_s3)
+    s3_userbase = _cohort_userbase(past_s3)
 
     # S4a — completed (in S5 or S6)
     s4a_csps = len(completed)
@@ -1425,9 +1445,8 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
     s4a_u1_mig = sum(_u1_for(p, u1_by)["migrated"] for p in completed)
     s4a_u2_total = sum(_u2_total_for(p, u2_total) for p in completed)
     s4a_u2_pick = sum(_u2_picked_for(p, u2_picked) for p in completed)
-    # Userbase for completed partners — uses sheet (U1+U2) where available,
-    # falls back to R15 active for partners not yet in the sheet.
-    s4a_userbase = sum(ub_of(p) for p in completed)
+    # Userbase for completed partners — cohort-level per Kapil's rule
+    s4a_userbase = _cohort_userbase(completed)
 
     # S4b — currently in S4
     # s4b_u1 (denominator for Migration Done ratio) = Migration Data aggregate,
@@ -1447,7 +1466,8 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
         s4b_u2_pick += u2p
         if u1d["total"] == 0 and u2t == 0:
             s4b_pending += r15_of(p)
-    s4b_userbase = s4b_u1_for_ub + s4b_u2 + s4b_pending
+    # Cohort-level userbase per Kapil's rule (matches 10,444 methodology)
+    s4b_userbase = _cohort_userbase(s4_partners) + s4b_pending
 
     # S5 reconciliation — same formulas as render_tab2_funnel
     s5_u1_total = s5_u1_mig = s5_u2_total = s5_u2_picked = 0
