@@ -1181,6 +1181,71 @@ def compute_unique_universe(gcp_creds, u2_rows_serialized, name_to_code):
     return u1_by, u2_total, u2_picked
 
 
+@st.cache_data(ttl=300)
+def _compute_shifted_by_key(gcp_creds, u2_rows_serialized, name_to_code):
+    """Kapil 2026-07-30: return per-partner-name count of mobiles that
+    shifted from U1 to U2 (in PX Raw as type=U1 AND in Main sheet).
+
+    Used to subtract from Migration Data's U1 aggregate for USERBASE
+    calculation only (Migration Done ratio still uses full aggregate).
+    """
+    from collections import defaultdict as _dd
+    creds = Credentials.from_service_account_info(
+        gcp_creds,
+        scopes=["https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive.readonly"],
+    )
+    try:
+        book = gspread.authorize(creds).open_by_key(PX_MIGRATION_WORKBOOK_ID)
+        raw = book.worksheet(PX_RAW_TAB).get_all_values()
+    except Exception:
+        return {}
+    if not raw:
+        return {}
+    hdr = [h.strip() for h in raw[0]]
+    last = next((i for i, h in enumerate(hdr) if not h), len(hdr))
+    hdr = hdr[:last]
+    try:
+        c_mob = hdr.index("customer_number")
+        c_type = hdr.index("type")
+        c_epn = hdr.index("exit_partner_name")
+    except ValueError:
+        return {}
+
+    def _n(s):
+        if s is None: return ""
+        s = str(s).strip().replace(" ", "").replace("-", "")
+        if s.endswith(".0"): s = s[:-2]
+        if s.startswith("+91"): s = s[3:]
+        elif s.startswith("91") and len(s) == 12: s = s[2:]
+        elif s.startswith("0"): s = s.lstrip("0")
+        return s
+
+    # Main sheet mobile set
+    u2_all = set()
+    for r in u2_rows_serialized:
+        m = _n(r.get("Mobile no") or r.get("Mobile"))
+        if m: u2_all.add(m)
+
+    # Per PX-Raw-partner: (mobile, partner_name_lower) shifted pairs
+    shifted_pairs = set()
+    for row in raw[1:]:
+        if len(row) < last: continue
+        if row[c_type] != "U1": continue
+        m = _n(row[c_mob])
+        pname = str(row[c_epn]).strip().lower()
+        if m and pname and m in u2_all:
+            shifted_pairs.add((m, pname))
+
+    # Count per partner name, aliased to canonical key
+    shifted_by_key = {}
+    for _, pname in shifted_pairs:
+        key = SHEET_NAME_ALIAS.get(pname, pname).lower() \
+              if pname in SHEET_NAME_ALIAS else pname
+        shifted_by_key[key] = shifted_by_key.get(key, 0) + 1
+    return shifted_by_key
+
+
 def build_sheet_lookups(u1_rows, u2_rows):
     """Return per-partner U1/U2 metrics from Google Sheet, keyed by lowercased name."""
     u1_by = {}
@@ -1293,13 +1358,20 @@ def fmt_pct(n, denom):
 
 def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
                           idle_total, s5_dedup, netbox_collected_by_code,
-                          idle_total_s6):
+                          idle_total_s6, shifted_by_key=None):
     """Aggregate today's funnel metrics into the flat dict written to Daily Totals.
 
     Self-contained: computes S5 reconciliation (could_not_pick, liability,
     devices collected) and S6 collected internally — same formulas as Tab 2.
+
+    Kapil 2026-07-30 final rule: `u1_by` (Migration Data aggregate) stays
+    authoritative for Migration Done ratios. For USERBASE totals only, we
+    subtract `shifted_by_key[partner_name]` — the count of mobiles this
+    partner had in PX Raw as U1 that also appear in Main sheet (Kapil's
+    "if data in raw sheet and moved to Main sheet, count only in U2" rule).
     """
     netbox_collected_by_code = netbox_collected_by_code or {}
+    shifted_by_key = shifted_by_key or {}
     by_state = defaultdict(list)
     for p in partners:
         by_state[p["current_state"]].append(p)
@@ -1307,9 +1379,17 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
     def r15_of(p):
         return r15_by_code.get(str(p.get("partner_code") or ""), 0)
 
+    def _u1_ub_for(p):
+        """U1 count for USERBASE math only — Migration Data total minus this
+        partner's shifted (U1↔U2 dedup). Migration Done calc uses full
+        Migration Data via `_u1_for`, unchanged."""
+        key = p["name"].lower()
+        full = u1_by.get(key, {}).get("total", 0) or 0
+        return max(0, full - shifted_by_key.get(key, 0))
+
     def sheet_ub(p):
         key = p["name"].lower()
-        return (u1_by.get(key, {}).get("total", 0) or 0) + (u2_total.get(key, 0) or 0)
+        return _u1_ub_for(p) + (u2_total.get(key, 0) or 0)
 
     def ub_of(p):
         s = sheet_ub(p)
@@ -1347,19 +1427,24 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
     s4a_userbase = sum(ub_of(p) for p in completed)
 
     # S4b — currently in S4
+    # s4b_u1 (denominator for Migration Done ratio) = Migration Data aggregate,
+    # untouched. s4b_userbase uses the shifted-subtracted U1 count so U1↔U2
+    # overlap isn't double-counted in userbase totals.
     s4b_csps = len(s4_partners)
     s4b_u1 = s4b_u1_mig = s4b_u2 = s4b_u2_pick = s4b_pending = 0
+    s4b_u1_for_ub = 0
     for p in s4_partners:
         u1d = _u1_for(p, u1_by)
         u2t = _u2_total_for(p, u2_total)
         u2p = _u2_picked_for(p, u2_picked)
-        s4b_u1 += u1d["total"]
+        s4b_u1 += u1d["total"]                # Migration Done denominator
         s4b_u1_mig += u1d["migrated"]
+        s4b_u1_for_ub += _u1_ub_for(p)        # Userbase side (dedup applied)
         s4b_u2 += u2t
         s4b_u2_pick += u2p
         if u1d["total"] == 0 and u2t == 0:
             s4b_pending += r15_of(p)
-    s4b_userbase = s4b_u1 + s4b_u2 + s4b_pending
+    s4b_userbase = s4b_u1_for_ub + s4b_u2 + s4b_pending
 
     # S5 reconciliation — same formulas as render_tab2_funnel
     s5_u1_total = s5_u1_mig = s5_u2_total = s5_u2_picked = 0
@@ -2362,16 +2447,34 @@ def render():
     #   - mobile appearing in both PX Raw (partner A) and Main sheet
     #     (partner B) — now goes only to partner B (U2 wins)
     # Both total and migrated derive from same source → ratios <= 100%.
+    # Kapil 2026-07-30 final rule:
+    #   - U1 counts (Migration Done ratios): Migration Data sheet is
+    #     AUTHORITATIVE and untouched. u1_by stays as build_sheet_lookups
+    #     returned it.
+    #   - U2 counts: replaced with unique-(mobile, partner)-pair compute
+    #     to avoid double-counting duplicate rows and to preserve
+    #     multi-partner exits.
+    #   - Userbase totals: subtract per-partner shifted mobiles (PX Raw
+    #     type=U1 ∩ Main sheet) from U1 side of sheet_ub, so mobiles
+    #     already counted in U2 aren't double-counted from U1.
+    shifted_by_key = {}
     try:
         _u1_fresh, _u2_total_fresh, _u2_picked_fresh = compute_unique_universe(
             secrets["gcp_creds"], u2_rows, name_to_code,
         )
-        if _u1_fresh or _u2_total_fresh:
-            # Wholesale replace (not merge) so keys that existed only in
-            # Migration Data aggregate but not in unique universe drop to 0.
-            u1_by.clear(); u1_by.update(_u1_fresh)
+        if _u2_total_fresh:
             u2_total.clear(); u2_total.update(_u2_total_fresh)
             u2_picked.clear(); u2_picked.update(_u2_picked_fresh)
+        # Shifted count per partner key = the fresh U1 partition returns
+        # {key: {"total": count_of_U1_mobiles_ALSO_in_U2}}? No — fresh U1
+        # already EXCLUDES mobiles in Main sheet. So shifted per partner =
+        # (Migration Data U1 total for this partner) − (fresh U1 total).
+        # But partners in Migration Data may not be in fresh; treat missing
+        # as 0 → subtract the entire Migration Data U1 (which is wrong).
+        # Cleaner: compute shifted directly from PX Raw type=U1 ∩ Main sheet.
+        shifted_by_key = _compute_shifted_by_key(
+            secrets["gcp_creds"], u2_rows, name_to_code,
+        )
     except Exception:
         pass  # non-critical enrichment — never block the dashboard
 
@@ -2467,6 +2570,7 @@ def render():
     today_metrics = compute_today_metrics(
         partners, u1_by, u2_total, u2_picked, r15_by_code,
         idle_total, s5_dedup, netbox_collected_by_code, idle_total_s6,
+        shifted_by_key=shifted_by_key,
     )
     today_totals = {}   # today's cron row — authoritative for cnp/dedup
     yest_totals = {}    # yesterday's cron row — D-1 baseline for delta
