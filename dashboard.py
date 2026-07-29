@@ -1031,22 +1031,22 @@ def render_tab1_status(u1, u2):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=300)
-def compute_u1_from_px_raw(gcp_creds, u2_rows_serialized, name_to_code):
-    """Kapil 2026-07-28 (revised 2026-07-29): compute U1 counts FRESHLY
-    from PX Migration Raw Data, excluding any mobile that appears in the
-    Main sheet (U2). Both total and migrated derive from the same
-    source, so ratios never exceed 100%.
+def compute_unique_universe(gcp_creds, u2_rows_serialized, name_to_code):
+    """Kapil 2026-07-30: compute a TRULY UNIQUE per-customer view where
+    every mobile appears exactly once across the U1/U2 universe.
 
-    Rule (Kapil): if a mobile is in both U1 and U2, count in U2 only.
+    Rule: a mobile in the Main sheet is U2 (attributed to its Main-sheet
+    Partner). Any PX Raw type=U1 mobile that's ALSO in Main sheet is
+    dropped from U1 (kept only in U2). Any duplicate rows within the same
+    sheet (same mobile listed twice) are dedupped — counted once.
 
-    Prior approach subtracted overlap from Migration Data aggregates —
-    reduced total by full overlap count but migrated by only overlaps
-    with Status='Done', producing >100% Migration Done ratios. Replaced
-    entirely by this fresh compute.
-
-    Returns:
-      u1_fresh_by_key: {lowercased_partner_name: {"total": n, "migrated": n,
-                                                   "not_migrated": n, "wip": n}}
+    Returns per-partner-name dicts (compatible with build_sheet_lookups
+    output, so existing accessors _u1_for / _u2_total_for / _u2_picked_for
+    keep working):
+      u1_by:      {name_lower: {"total", "migrated", "not_migrated", "wip"}}
+      u2_total:   {name_lower: count of unique U2 mobiles owned by partner}
+      u2_picked:  {name_lower: count of unique U2 mobiles owned by partner
+                              where the row is marked picked}
     """
     from collections import defaultdict as _dd
     creds = Credentials.from_service_account_info(
@@ -1058,9 +1058,9 @@ def compute_u1_from_px_raw(gcp_creds, u2_rows_serialized, name_to_code):
         book = gspread.authorize(creds).open_by_key(PX_MIGRATION_WORKBOOK_ID)
         raw = book.worksheet(PX_RAW_TAB).get_all_values()
     except Exception:
-        return {}
+        return {}, {}, {}
     if not raw:
-        return {}
+        return {}, {}, {}
     hdr = [h.strip() for h in raw[0]]
     last = next((i for i, h in enumerate(hdr) if not h), len(hdr))
     hdr = hdr[:last]
@@ -1069,7 +1069,7 @@ def compute_u1_from_px_raw(gcp_creds, u2_rows_serialized, name_to_code):
         c_type = hdr.index("type")
         c_code = hdr.index("exit_partner_code")
     except ValueError:
-        return {}
+        return {}, {}, {}
     c_status = hdr.index("Migration Status") if "Migration Status" in hdr else None
     c_ap = hdr.index("Aakash/Pradeep Remarks") if "Aakash/Pradeep Remarks" in hdr else None
 
@@ -1082,43 +1082,88 @@ def compute_u1_from_px_raw(gcp_creds, u2_rows_serialized, name_to_code):
         elif s.startswith("0"): s = s.lstrip("0")
         return s
 
-    # Global U2 mobile set (a mobile in U2 for ANY partner disqualifies
-    # it from any partner's U1 — matches how dedup rule is worded).
-    u2_all_mobs = set()
-    for r in u2_rows_serialized:
-        mob = _n(r.get("Mobile no") or r.get("Mobile"))
-        if mob:
-            u2_all_mobs.add(mob)
+    # ── PASS 1: U2 universe from Main sheet ────────────────────────────
+    # Attribute each unique mobile to its Main-sheet Partner. First
+    # occurrence wins (defends against duplicate rows / partner-name
+    # variance for the same customer).
+    name_to_code_lower = {n.lower(): str(c) for n, c in name_to_code.items()}
+    code_to_name = {str(c): n for n, c in name_to_code.items()}
 
-    # Fresh U1 per partner_code (excluding U2 mobiles)
-    u1_by_code = _dd(lambda: {"total": 0, "migrated": 0,
-                                "not_migrated": 0, "wip": 0})
+    def _to_key(sheet_partner):
+        low = str(sheet_partner or "").strip().lower()
+        alias = (SHEET_NAME_ALIAS.get(low, "").lower()
+                 if low in SHEET_NAME_ALIAS else low)
+        # Use canonical name (Supabase) if we can map, else the sheet's
+        # own lowercase name.
+        code = name_to_code_lower.get(alias)
+        if code:
+            canon = code_to_name.get(code, alias)
+            return canon.lower()
+        return alias
+
+    u2_owner_of_mob = {}   # mobile -> canonical partner key
+    u2_picked_mobs = set() # set of mobiles marked picked (any occurrence)
+    for r in u2_rows_serialized:
+        m = _n(r.get("Mobile no") or r.get("Mobile"))
+        if not m: continue
+        if m not in u2_owner_of_mob:
+            u2_owner_of_mob[m] = _to_key(r.get("Partner"))
+        # Pick flag: OR across all rows of the same mobile
+        remark = str(r.get("Remarks Dropdown") or "").strip().lower()
+        pradeep = str(r.get("Device Picked (Ajinkya/Pradeep)") or "").strip().lower()
+        if remark == "device picked up" or pradeep == "yes":
+            u2_picked_mobs.add(m)
+
+    u2_all_mobs = set(u2_owner_of_mob)
+
+    # ── PASS 2: U1 universe from PX Raw Data ───────────────────────────
+    # For each U1 mobile NOT in Main sheet: attribute to exit_partner_code.
+    # First occurrence wins (some partners have duplicate rows for the
+    # same mobile).
+    u1_owner_of_mob = {}   # mobile -> canonical partner key
+    u1_status_of_mob = {}  # mobile -> "migrated" / "not_migrated" / "wip" / ""
     for row in raw[1:]:
         if len(row) < last: continue
         if row[c_type] != "U1": continue
         m = _n(row[c_mob]); code = str(row[c_code]).strip()
         if not m or not code: continue
-        if m in u2_all_mobs: continue  # dedup: excluded, count in U2 instead
-        status = str(row[c_status] or "").strip().lower() if c_status is not None else ""
-        ap = str(row[c_ap] or "").strip().lower() if c_ap is not None else ""
-        u1_by_code[code]["total"] += 1
-        if status == "done" or ap == "migration done":
-            u1_by_code[code]["migrated"] += 1
-        elif status in ("not migrated", "not_migrated") or ap == "migration not done":
-            u1_by_code[code]["not_migrated"] += 1
-        elif status in ("wip", "migration in process", "in process", "in_progress"):
-            u1_by_code[code]["wip"] += 1
-
-    # Map partner_code -> lowercased partner name (dashboard's key convention)
-    code_to_name = {str(c): n for n, c in name_to_code.items()}
-    u1_fresh_by_key = {}
-    for code, counts in u1_by_code.items():
+        if m in u2_all_mobs: continue    # excluded: counted in U2
+        if m in u1_owner_of_mob: continue  # first occurrence wins
         name = code_to_name.get(code)
         if not name: continue
         key = name.lower()
         key = SHEET_NAME_ALIAS.get(key, name).lower() if key in SHEET_NAME_ALIAS else key
-        u1_fresh_by_key[key] = dict(counts)
-    return u1_fresh_by_key
+        u1_owner_of_mob[m] = key
+        status = str(row[c_status] or "").strip().lower() if c_status is not None else ""
+        ap = str(row[c_ap] or "").strip().lower() if c_ap is not None else ""
+        if status == "done" or ap == "migration done":
+            u1_status_of_mob[m] = "migrated"
+        elif status in ("not migrated", "not_migrated") or ap == "migration not done":
+            u1_status_of_mob[m] = "not_migrated"
+        elif status in ("wip", "migration in process", "in process", "in_progress"):
+            u1_status_of_mob[m] = "wip"
+        else:
+            u1_status_of_mob[m] = ""
+
+    # ── AGGREGATE per canonical partner key ────────────────────────────
+    u1_by = {}   # key -> {total, migrated, not_migrated, wip}
+    for m, key in u1_owner_of_mob.items():
+        rec = u1_by.setdefault(key, {"total": 0, "migrated": 0,
+                                      "not_migrated": 0, "wip": 0})
+        rec["total"] += 1
+        st = u1_status_of_mob.get(m, "")
+        if st == "migrated": rec["migrated"] += 1
+        elif st == "not_migrated": rec["not_migrated"] += 1
+        elif st == "wip": rec["wip"] += 1
+
+    u2_total = {}    # key -> count of unique U2 mobiles
+    u2_picked = {}   # key -> count of unique U2 mobiles marked picked
+    for m, key in u2_owner_of_mob.items():
+        u2_total[key] = u2_total.get(key, 0) + 1
+        if m in u2_picked_mobs:
+            u2_picked[key] = u2_picked.get(key, 0) + 1
+
+    return u1_by, u2_total, u2_picked
 
 
 def build_sheet_lookups(u1_rows, u2_rows):
@@ -2293,19 +2338,25 @@ def render():
     s5_all_lower = {p["name"].lower() for p in partners if p["current_state"] == "S5"}
     name_to_code = {p["name"]: code_of(p) for p in partners if code_of(p)}
 
-    # Kapil 2026-07-29: OVERRIDE u1_by with fresh compute from PX
-    # Migration Raw Data, excluding any mobile that's also in Main sheet.
-    # Both total and migrated derive from the same source, so ratios
-    # like Migration Done % stay <= 100%. The Migration Data sheet's
-    # aggregate is no longer trusted for the dashboard's Tab 5/2/6
-    # displays (only for the tab6 breakdown fallback if fresh is empty).
+    # Kapil 2026-07-30: OVERRIDE u1_by, u2_total, u2_picked with the
+    # unique-universe compute. Every mobile is counted exactly once and
+    # attributed to a single partner (Main-sheet Partner if in Main sheet,
+    # else PX Raw exit_partner_code). Fixes double-counting from:
+    #   - duplicate Main sheet rows for same mobile
+    #   - mobile listed under 2 different partners in Main sheet
+    #   - mobile appearing in both PX Raw (partner A) and Main sheet
+    #     (partner B) — now goes only to partner B (U2 wins)
+    # Both total and migrated derive from same source → ratios <= 100%.
     try:
-        _u1_fresh = compute_u1_from_px_raw(
+        _u1_fresh, _u2_total_fresh, _u2_picked_fresh = compute_unique_universe(
             secrets["gcp_creds"], u2_rows, name_to_code,
         )
-        if _u1_fresh:
-            for _key, _counts in _u1_fresh.items():
-                u1_by[_key] = _counts
+        if _u1_fresh or _u2_total_fresh:
+            # Wholesale replace (not merge) so keys that existed only in
+            # Migration Data aggregate but not in unique universe drop to 0.
+            u1_by.clear(); u1_by.update(_u1_fresh)
+            u2_total.clear(); u2_total.update(_u2_total_fresh)
+            u2_picked.clear(); u2_picked.update(_u2_picked_fresh)
     except Exception:
         pass  # non-critical enrichment — never block the dashboard
 
