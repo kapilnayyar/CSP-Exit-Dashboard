@@ -1032,21 +1032,25 @@ def render_tab1_status(u1, u2):
 
 @st.cache_data(ttl=300)
 def compute_unique_universe(gcp_creds, u2_rows_serialized, name_to_code):
-    """Kapil 2026-07-30: compute a TRULY UNIQUE per-customer view where
-    every mobile appears exactly once across the U1/U2 universe.
+    """Kapil 2026-07-30: unique userbase compute keyed on
+    (mobile, partner) pairs.
 
-    Rule: a mobile in the Main sheet is U2 (attributed to its Main-sheet
-    Partner). Any PX Raw type=U1 mobile that's ALSO in Main sheet is
-    dropped from U1 (kept only in U2). Any duplicate rows within the same
-    sheet (same mobile listed twice) are dedupped — counted once.
+    Business rule: if the same mobile appears under 2 different partners
+    in Main sheet, that's a legitimate multi-exit event (customer exited
+    partner A, migrated to B, and B has now also entered exit) — count
+    each partner's entry independently. Same rule for PX Raw type=U1
+    under multiple partners. Only true within-partner duplicate rows
+    (same mobile listed twice under the same partner) collapse to 1.
 
-    Returns per-partner-name dicts (compatible with build_sheet_lookups
-    output, so existing accessors _u1_for / _u2_total_for / _u2_picked_for
-    keep working):
+    U1<->U2 dedup still applies at the mobile level: if mobile appears
+    in Main sheet under ANY partner, it is excluded from U1 for ALL
+    partners (kept only in U2).
+
+    Returns per-partner-name dicts (drop-in replacement for
+    build_sheet_lookups output):
       u1_by:      {name_lower: {"total", "migrated", "not_migrated", "wip"}}
-      u2_total:   {name_lower: count of unique U2 mobiles owned by partner}
-      u2_picked:  {name_lower: count of unique U2 mobiles owned by partner
-                              where the row is marked picked}
+      u2_total:   {name_lower: count of (mobile, partner) pairs}
+      u2_picked:  {name_lower: count of pairs marked picked}
     """
     from collections import defaultdict as _dd
     creds = Credentials.from_service_account_info(
@@ -1082,10 +1086,19 @@ def compute_unique_universe(gcp_creds, u2_rows_serialized, name_to_code):
         elif s.startswith("0"): s = s.lstrip("0")
         return s
 
-    # ── PASS 1: U2 universe from Main sheet ────────────────────────────
-    # Attribute each unique mobile to its Main-sheet Partner. First
-    # occurrence wins (defends against duplicate rows / partner-name
-    # variance for the same customer).
+    # Kapil 2026-07-30 clarification: multi-partner entries for the same
+    # mobile are NOT duplicates. They represent separate exit events —
+    # customer was with exit-partner A, migrated to B, and B has now
+    # also entered exit. Each partner deserves its own count.
+    #
+    # Attribution unit is the (mobile, partner) pair, not the mobile:
+    #  - Main sheet lists mobile M under partners A and B → +1 for A, +1 for B
+    #  - PX Raw type=U1 lists mobile M under partners C and D → +1 for C, +1 for D
+    # U1<->U2 dedup still applies: if mobile is in Main sheet under ANY
+    # partner, it is excluded from U1 (kept only in U2). If Main sheet
+    # has (M, A) and (M, B) and PX Raw has (M, U1, C), then U1 for C = 0
+    # and U2 for A = 1, U2 for B = 1 → total = 2 counts.
+
     name_to_code_lower = {n.lower(): str(c) for n, c in name_to_code.items()}
     code_to_name = {str(c): n for n, c in name_to_code.items()}
 
@@ -1093,74 +1106,76 @@ def compute_unique_universe(gcp_creds, u2_rows_serialized, name_to_code):
         low = str(sheet_partner or "").strip().lower()
         alias = (SHEET_NAME_ALIAS.get(low, "").lower()
                  if low in SHEET_NAME_ALIAS else low)
-        # Use canonical name (Supabase) if we can map, else the sheet's
-        # own lowercase name.
         code = name_to_code_lower.get(alias)
         if code:
             canon = code_to_name.get(code, alias)
             return canon.lower()
         return alias
 
-    u2_owner_of_mob = {}   # mobile -> canonical partner key
-    u2_picked_mobs = set() # set of mobiles marked picked (any occurrence)
+    # ── PASS 1: U2 universe from Main sheet ────────────────────────────
+    # Per (mobile, partner_key): 1 entry. Duplicate rows within the
+    # same (mobile, partner) collapse to 1 (that IS a data-quality dup,
+    # not a legitimate multi-exit event).
+    u2_pairs = set()          # (mobile, partner_key)
+    u2_picked_pairs = set()   # (mobile, partner_key) where picked
+    u2_all_mobs = set()       # all mobiles in Main sheet (used for U1 exclusion)
     for r in u2_rows_serialized:
         m = _n(r.get("Mobile no") or r.get("Mobile"))
         if not m: continue
-        if m not in u2_owner_of_mob:
-            u2_owner_of_mob[m] = _to_key(r.get("Partner"))
-        # Pick flag: OR across all rows of the same mobile
+        key = _to_key(r.get("Partner"))
+        if not key: continue
+        u2_all_mobs.add(m)
+        u2_pairs.add((m, key))
         remark = str(r.get("Remarks Dropdown") or "").strip().lower()
         pradeep = str(r.get("Device Picked (Ajinkya/Pradeep)") or "").strip().lower()
         if remark == "device picked up" or pradeep == "yes":
-            u2_picked_mobs.add(m)
-
-    u2_all_mobs = set(u2_owner_of_mob)
+            u2_picked_pairs.add((m, key))
 
     # ── PASS 2: U1 universe from PX Raw Data ───────────────────────────
-    # For each U1 mobile NOT in Main sheet: attribute to exit_partner_code.
-    # First occurrence wins (some partners have duplicate rows for the
-    # same mobile).
-    u1_owner_of_mob = {}   # mobile -> canonical partner key
-    u1_status_of_mob = {}  # mobile -> "migrated" / "not_migrated" / "wip" / ""
+    # Per (mobile, partner_key): 1 entry. Skip mobiles that appear in
+    # Main sheet (U1<->U2 dedup rule).
+    u1_pairs = set()             # (mobile, partner_key)
+    u1_status_of_pair = {}       # (mobile, partner_key) -> status
     for row in raw[1:]:
         if len(row) < last: continue
         if row[c_type] != "U1": continue
         m = _n(row[c_mob]); code = str(row[c_code]).strip()
         if not m or not code: continue
-        if m in u2_all_mobs: continue    # excluded: counted in U2
-        if m in u1_owner_of_mob: continue  # first occurrence wins
+        if m in u2_all_mobs: continue   # excluded: counted in U2 (any partner)
         name = code_to_name.get(code)
         if not name: continue
         key = name.lower()
         key = SHEET_NAME_ALIAS.get(key, name).lower() if key in SHEET_NAME_ALIAS else key
-        u1_owner_of_mob[m] = key
+        pair = (m, key)
+        if pair in u1_pairs: continue   # dedup within (mobile, partner)
+        u1_pairs.add(pair)
         status = str(row[c_status] or "").strip().lower() if c_status is not None else ""
         ap = str(row[c_ap] or "").strip().lower() if c_ap is not None else ""
         if status == "done" or ap == "migration done":
-            u1_status_of_mob[m] = "migrated"
+            u1_status_of_pair[pair] = "migrated"
         elif status in ("not migrated", "not_migrated") or ap == "migration not done":
-            u1_status_of_mob[m] = "not_migrated"
+            u1_status_of_pair[pair] = "not_migrated"
         elif status in ("wip", "migration in process", "in process", "in_progress"):
-            u1_status_of_mob[m] = "wip"
+            u1_status_of_pair[pair] = "wip"
         else:
-            u1_status_of_mob[m] = ""
+            u1_status_of_pair[pair] = ""
 
     # ── AGGREGATE per canonical partner key ────────────────────────────
-    u1_by = {}   # key -> {total, migrated, not_migrated, wip}
-    for m, key in u1_owner_of_mob.items():
+    u1_by = {}
+    for (m, key) in u1_pairs:
         rec = u1_by.setdefault(key, {"total": 0, "migrated": 0,
                                       "not_migrated": 0, "wip": 0})
         rec["total"] += 1
-        st = u1_status_of_mob.get(m, "")
+        st = u1_status_of_pair.get((m, key), "")
         if st == "migrated": rec["migrated"] += 1
         elif st == "not_migrated": rec["not_migrated"] += 1
         elif st == "wip": rec["wip"] += 1
 
-    u2_total = {}    # key -> count of unique U2 mobiles
-    u2_picked = {}   # key -> count of unique U2 mobiles marked picked
-    for m, key in u2_owner_of_mob.items():
+    u2_total = {}
+    u2_picked = {}
+    for (m, key) in u2_pairs:
         u2_total[key] = u2_total.get(key, 0) + 1
-        if m in u2_picked_mobs:
+        if (m, key) in u2_picked_pairs:
             u2_picked[key] = u2_picked.get(key, 0) + 1
 
     return u1_by, u2_total, u2_picked
