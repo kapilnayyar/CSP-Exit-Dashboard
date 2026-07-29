@@ -1221,25 +1221,28 @@ def _compute_shifted_by_key(gcp_creds, u2_rows_serialized, name_to_code):
         elif s.startswith("0"): s = s.lstrip("0")
         return s
 
-    # Main sheet mobile set
+    # Main sheet mobile set (global — partner doesn't matter for shift check)
     u2_all = set()
     for r in u2_rows_serialized:
         m = _n(r.get("Mobile no") or r.get("Mobile"))
         if m: u2_all.add(m)
 
-    # Per PX-Raw-partner: (mobile, partner_name_lower) shifted pairs
-    shifted_pairs = set()
+    # Kapil 2026-07-30: count EACH SHIFTED MOBILE ONCE (unique-mobile level,
+    # not per-PX-Raw-partner). If a mobile is in PX Raw as U1 under multiple
+    # partners AND is in Main sheet, it counts as 1 shift, attributed to the
+    # FIRST PX Raw partner encountered. Ensures the sum across all partners
+    # equals the count of unique shifted mobiles (~2,848).
+    seen_mob = set()
+    shifted_by_key = {}
     for row in raw[1:]:
         if len(row) < last: continue
         if row[c_type] != "U1": continue
         m = _n(row[c_mob])
         pname = str(row[c_epn]).strip().lower()
-        if m and pname and m in u2_all:
-            shifted_pairs.add((m, pname))
-
-    # Count per partner name, aliased to canonical key
-    shifted_by_key = {}
-    for _, pname in shifted_pairs:
+        if not m or not pname: continue
+        if m not in u2_all: continue      # not in Main sheet → not shifted
+        if m in seen_mob: continue        # already attributed to a partner
+        seen_mob.add(m)
         key = SHEET_NAME_ALIAS.get(pname, pname).lower() \
               if pname in SHEET_NAME_ALIAS else pname
         shifted_by_key[key] = shifted_by_key.get(key, 0) + 1
