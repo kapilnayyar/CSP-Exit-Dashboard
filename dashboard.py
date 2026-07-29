@@ -1400,22 +1400,23 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
 
     def _cohort_userbase(cohort):
         """Kapil 2026-07-30 (final): compute userbase at the COHORT level,
-        not per-partner. Formula:
-            max(0, sum(MD_U1) − sum(shifted)) + sum(U2 pairs) + fallback R15
+        not per-partner. Formula (Option B, strict sheet-only):
+            max(0, sum(MD_U1) − sum(shifted)) + sum(U2 pairs)
         Per-partner sum would under-subtract because max(0, …) clamps
         excess shifted for small partners. Cohort-level subtraction matches
         Kapil's rule: 3,581 − 2,848 + 9,711 = 10,444.
+
+        R15 fallback for partners with no sheet data is INTENTIONALLY OMITTED
+        so dashboard matches the offline HTML report (which also uses
+        sheet-only compute). Partners newly in exit with no sheet entries
+        will show 0 userbase until they're added to Migration Data or
+        Main sheet.
         """
         md_u1 = sum((u1_by.get(p["name"].lower(), {}).get("total", 0) or 0)
                     for p in cohort)
         shifted = sum(shifted_by_key.get(p["name"].lower(), 0) for p in cohort)
         u2 = sum((u2_total.get(p["name"].lower(), 0) or 0) for p in cohort)
-        fallback_r15 = sum(
-            r15_of(p) for p in cohort
-            if (u1_by.get(p["name"].lower(), {}).get("total", 0) or 0) == 0
-            and (u2_total.get(p["name"].lower(), 0) or 0) == 0
-        )
-        return max(0, md_u1 - shifted) + u2 + fallback_r15
+        return max(0, md_u1 - shifted) + u2
 
     in_pipeline = [p for p in partners if p.get("current_state") in ("S1","S2","S3","S4","S5","S6")]
     current_s2 = by_state.get("S2", [])
