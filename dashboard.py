@@ -2491,6 +2491,24 @@ def render():
     if _baseline:
         yest_totals = _baseline
 
+    # Kapil 2026-07-30: A U1->U2 shift is a bucket move (deducted from U1,
+    # added to U2). Total userbase must NOT change from a shift — only real
+    # work (pickup, new mobile, migration) should produce a delta.
+    # Cron rows in Daily Totals were written with the OLD non-deduped logic
+    # and cannot be back-fixed for historical dates. So we align D-1 to the
+    # same fresh U1 compute we use for D0 by copying the U1/userbase fields
+    # from today_metrics into yest_totals. Result: delta = 0 for U1/userbase
+    # when only bucket-shifts happened, and reflects real work otherwise.
+    # (Fields NOT copied: pickup counts, S5/S6 fields, migrated aggregates
+    #  — those correctly show day-over-day movement.)
+    if yest_totals and today_metrics:
+        for _fld in ("s1_userbase", "s2_userbase", "s3_userbase",
+                     "s4a_u1_total", "s4a_u1_mig",
+                     "s4b_u1", "s4b_u1_mig",
+                     "s4a_userbase", "s4b_userbase"):
+            if _fld in today_metrics:
+                yest_totals[_fld] = today_metrics[_fld]
+
     # ── Cron heartbeat: warn if today's business-day cron row is missing ──
     # A row for the current business day should exist by 02:45 IST (after
     # all cron slots have fired). If not, show a red banner so Kapil knows
