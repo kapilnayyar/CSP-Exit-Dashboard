@@ -1399,23 +1399,34 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
         return s if s > 0 else r15_of(p)
 
     def _cohort_userbase(cohort):
-        """Kapil 2026-07-30 (final): compute userbase at the COHORT level,
-        not per-partner. Formula (Option B, strict sheet-only):
+        """Kapil 2026-07-30 (final): compute userbase at the COHORT level.
+        Formula (Option B, strict sheet-only):
             max(0, sum(MD_U1) − sum(shifted)) + sum(U2 pairs)
-        Per-partner sum would under-subtract because max(0, …) clamps
-        excess shifted for small partners. Cohort-level subtraction matches
-        Kapil's rule: 3,581 − 2,848 + 9,711 = 10,444.
 
-        R15 fallback for partners with no sheet data is INTENTIONALLY OMITTED
-        so dashboard matches the offline HTML report (which also uses
-        sheet-only compute). Partners newly in exit with no sheet entries
-        will show 0 userbase until they're added to Migration Data or
-        Main sheet.
+        Uses attribution-aware accessors (_u1_for, _u2_total_for) so
+        name-collision partners (Shree Shyam Broadband, Riddhi Enterprises,
+        Sai Cable Network — each has 2 Supabase codes with same lowercase
+        name) don't get double-counted. Owner partner returns the count,
+        loser partner returns 0 via ATTRIBUTION_OVERRIDE.
+
+        Shifted subtraction uses attribution too: if the owner partner
+        has 80 U2 pairs and 50 shifted, subtract 50; loser contributes 0.
+
+        R15 fallback intentionally omitted (matches offline HTML report).
         """
-        md_u1 = sum((u1_by.get(p["name"].lower(), {}).get("total", 0) or 0)
-                    for p in cohort)
-        shifted = sum(shifted_by_key.get(p["name"].lower(), 0) for p in cohort)
-        u2 = sum((u2_total.get(p["name"].lower(), 0) or 0) for p in cohort)
+        md_u1 = sum(_u1_for(p, u1_by)["total"] for p in cohort)
+        # Shifted: attribute per partner_code (owner returns real count,
+        # loser returns 0). Falls back to name lookup for non-collision partners.
+        def _shifted_for(p):
+            code = str(p.get("partner_code") or "")
+            if code in ATTRIBUTION_OVERRIDE:
+                # Same attribution: owner gets it, loser gets 0
+                v = ATTRIBUTION_OVERRIDE[code].get("u2_total", "auto")
+                if v == 0:
+                    return 0
+            return shifted_by_key.get(p["name"].lower(), 0)
+        shifted = sum(_shifted_for(p) for p in cohort)
+        u2 = sum(_u2_total_for(p, u2_total) for p in cohort)
         return max(0, md_u1 - shifted) + u2
 
     in_pipeline = [p for p in partners if p.get("current_state") in ("S1","S2","S3","S4","S5","S6")]
