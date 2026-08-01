@@ -1399,34 +1399,24 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
         return s if s > 0 else r15_of(p)
 
     def _cohort_userbase(cohort):
-        """Kapil 2026-07-30 (final): compute userbase at the COHORT level.
+        """Kapil 2026-08-02 (final-v2): compute userbase at the COHORT level
+        using SET-BASED NAME DEDUP — same algorithm as the offline HTML
+        report so both views produce identical numbers.
+
         Formula (Option B, strict sheet-only):
             max(0, sum(MD_U1) − sum(shifted)) + sum(U2 pairs)
+            summed over UNIQUE partner names in the cohort
 
-        Uses attribution-aware accessors (_u1_for, _u2_total_for) so
-        name-collision partners (Shree Shyam Broadband, Riddhi Enterprises,
-        Sai Cable Network — each has 2 Supabase codes with same lowercase
-        name) don't get double-counted. Owner partner returns the count,
-        loser partner returns 0 via ATTRIBUTION_OVERRIDE.
-
-        Shifted subtraction uses attribution too: if the owner partner
-        has 80 U2 pairs and 50 shifted, subtract 50; loser contributes 0.
+        This handles name collisions (Shree Shyam / Riddhi / Sai — each
+        has 2 Supabase codes but ONE lowercase name) by counting each
+        canonical key once. Same customers not double-counted.
 
         R15 fallback intentionally omitted (matches offline HTML report).
         """
-        md_u1 = sum(_u1_for(p, u1_by)["total"] for p in cohort)
-        # Shifted: attribute per partner_code (owner returns real count,
-        # loser returns 0). Falls back to name lookup for non-collision partners.
-        def _shifted_for(p):
-            code = str(p.get("partner_code") or "")
-            if code in ATTRIBUTION_OVERRIDE:
-                # Same attribution: owner gets it, loser gets 0
-                v = ATTRIBUTION_OVERRIDE[code].get("u2_total", "auto")
-                if v == 0:
-                    return 0
-            return shifted_by_key.get(p["name"].lower(), 0)
-        shifted = sum(_shifted_for(p) for p in cohort)
-        u2 = sum(_u2_total_for(p, u2_total) for p in cohort)
+        keys = {p["name"].lower() for p in cohort}
+        md_u1 = sum((u1_by.get(k, {}).get("total", 0) or 0) for k in keys)
+        shifted = sum(shifted_by_key.get(k, 0) for k in keys)
+        u2 = sum((u2_total.get(k, 0) or 0) for k in keys)
         return max(0, md_u1 - shifted) + u2
 
     in_pipeline = [p for p in partners if p.get("current_state") in ("S1","S2","S3","S4","S5","S6")]
