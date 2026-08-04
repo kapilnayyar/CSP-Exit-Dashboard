@@ -222,6 +222,19 @@ def main():
     # midnight. The snapshot represents "end of TODAY", which is the D-1
     # baseline for TOMORROW's dashboard view. So we label the row with
     # tomorrow's date so dashboard's "today's row" lookup finds it.
+    # TARGET_DATE env var lets ops force a specific row label — used when
+    # Kapil adds pickup/userbase data for a past business day and needs the
+    # snapshot to overwrite THAT row instead of today's. Format: YYYY-MM-DD.
+    # When unset, we fall through to the automatic 01:30 IST business-day
+    # rule below.
+    now_ist = datetime.now(IST)
+    _forced = os.environ.get("TARGET_DATE", "").strip()
+    if _forced:
+        # Validate — a bad value would corrupt Daily Totals silently.
+        datetime.strptime(_forced, "%Y-%m-%d")
+        target_date = _forced
+        print(f"TARGET_DATE override active at {now_ist.strftime('%H:%M IST')} - "
+              f"labeling row as: {target_date}")
     # Kapil's 01:30 IST business-day cutoff: captures fired before 01:30
     # IST belong to the PREVIOUS business day (per his rule: "edits done
     # before 01:30 IST count as previous day's work"). This matches how
@@ -229,8 +242,7 @@ def main():
     # fired at 01:30 IST 21-Jul labels 07-21 (start of 21-Jul biz day)
     # while a manual snapshot fired at 00:30 IST 21-Jul labels 07-20
     # (still inside 20-Jul biz day).
-    now_ist = datetime.now(IST)
-    if (now_ist.hour, now_ist.minute) < (1, 30):
+    elif (now_ist.hour, now_ist.minute) < (1, 30):
         target_date = (now_ist - timedelta(days=1)).strftime("%Y-%m-%d")
         print(f"Pre-01:30-IST capture at {now_ist.strftime('%H:%M IST')} - "
               f"labeling row as previous business day: {target_date}")
