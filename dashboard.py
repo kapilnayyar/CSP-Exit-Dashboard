@@ -1361,7 +1361,8 @@ def fmt_pct(n, denom):
 
 def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
                           idle_total, s5_dedup, netbox_collected_by_code,
-                          idle_total_s6, shifted_by_key=None):
+                          idle_total_s6, shifted_by_key=None,
+                          u2_total_raw=None):
     """Aggregate today's funnel metrics into the flat dict written to Daily Totals.
 
     Self-contained: computes S5 reconciliation (could_not_pick, liability,
@@ -1399,24 +1400,27 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
         return s if s > 0 else r15_of(p)
 
     def _cohort_userbase(cohort):
-        """Kapil 2026-08-02 (final-v2): compute userbase at the COHORT level
-        using SET-BASED NAME DEDUP — same algorithm as the offline HTML
-        report so both views produce identical numbers.
+        """Kapil 2026-08-04 (final-v3): USE u2_total_raw (raw lowercase
+        Main-sheet Partner name, NO alias/code canonicalization) for the U2
+        term. Matches offline HTML report exactly — no over-count from
+        alias-lookup inflation.
 
-        Formula (Option B, strict sheet-only):
-            max(0, sum(MD_U1) − sum(shifted)) + sum(U2 pairs)
+        Prior versions used u2_total (canonicalized via _to_key), which pulled
+        extra Main-sheet rows into cohorts via alias resolution and over-
+        counted by ~19 customers vs offline report. Kapil confirmed report is
+        the trusted number → dashboard aligns down to it.
+
+        Formula (Option B, strict sheet-only, raw name keying):
+            max(0, sum(MD_U1) − sum(shifted)) + sum(U2 raw pairs)
             summed over UNIQUE partner names in the cohort
-
-        This handles name collisions (Shree Shyam / Riddhi / Sai — each
-        has 2 Supabase codes but ONE lowercase name) by counting each
-        canonical key once. Same customers not double-counted.
 
         R15 fallback intentionally omitted (matches offline HTML report).
         """
         keys = {p["name"].lower() for p in cohort}
         md_u1 = sum((u1_by.get(k, {}).get("total", 0) or 0) for k in keys)
         shifted = sum(shifted_by_key.get(k, 0) for k in keys)
-        u2 = sum((u2_total.get(k, 0) or 0) for k in keys)
+        _u2_src = u2_total_raw if u2_total_raw else u2_total
+        u2 = sum((_u2_src.get(k, 0) or 0) for k in keys)
         return max(0, md_u1 - shifted) + u2
 
     in_pipeline = [p for p in partners if p.get("current_state") in ("S1","S2","S3","S4","S5","S6")]
@@ -2591,11 +2595,27 @@ def render():
             st.cache_data.clear()
             st.rerun()
 
+    # Kapil 2026-08-04: build u2_total_raw with raw lowercase Main-sheet
+    # Partner names — NO alias/code canonicalization. Matches offline HTML
+    # report's u2_pairs_by_key exactly (10,437, not 10,456). Used only inside
+    # _cohort_userbase for cohort totals. u2_total (canonicalized) stays as
+    # the source for per-partner tables / Migration Done math / U2 pick math.
+    u2_total_raw = {}
+    _u2_seen_raw = set()
+    for _r in u2_rows:
+        _m = _n(_r.get("Mobile no") or _r.get("Mobile"))
+        _pn = str(_r.get("Partner") or "").strip().lower()
+        if not _m or not _pn: continue
+        if (_m, _pn) in _u2_seen_raw: continue
+        _u2_seen_raw.add((_m, _pn))
+        u2_total_raw[_pn] = u2_total_raw.get(_pn, 0) + 1
+
     # ── Daily Totals capture + D-1 read (powers Tab 5) ────────────────────────
     today_metrics = compute_today_metrics(
         partners, u1_by, u2_total, u2_picked, r15_by_code,
         idle_total, s5_dedup, netbox_collected_by_code, idle_total_s6,
         shifted_by_key=shifted_by_key,
+        u2_total_raw=u2_total_raw,
     )
     today_totals = {}   # today's cron row — authoritative for cnp/dedup
     yest_totals = {}    # yesterday's cron row — D-1 baseline for delta
