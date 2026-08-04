@@ -2600,10 +2600,19 @@ def render():
     # report's u2_pairs_by_key exactly (10,437, not 10,456). Used only inside
     # _cohort_userbase for cohort totals. u2_total (canonicalized) stays as
     # the source for per-partner tables / Migration Done math / U2 pick math.
+    def _mob_norm(v):
+        if v is None: return ""
+        s = str(v).strip().replace(" ", "").replace("-", "")
+        if s.endswith(".0"): s = s[:-2]
+        if s.startswith("+91"): s = s[3:]
+        elif s.startswith("91") and len(s) == 12: s = s[2:]
+        elif s.startswith("0"): s = s.lstrip("0")
+        return s
+
     u2_total_raw = {}
     _u2_seen_raw = set()
     for _r in u2_rows:
-        _m = _n(_r.get("Mobile no") or _r.get("Mobile"))
+        _m = _mob_norm(_r.get("Mobile no") or _r.get("Mobile"))
         _pn = str(_r.get("Partner") or "").strip().lower()
         if not _m or not _pn: continue
         if (_m, _pn) in _u2_seen_raw: continue
