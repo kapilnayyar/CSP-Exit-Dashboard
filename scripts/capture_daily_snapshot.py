@@ -515,6 +515,77 @@ GROUP BY 1"""
         netbox_collected_by_code.get(str(p.get("partner_code") or ""), 0)
         for p in s6_partners)
 
+    # Kapil 2026-08-04 (final): override s1_userbase / s3_userbase with the
+    # LIVE Kapil-rule formula (raw lowercase Main-sheet Partner name, shifted
+    # subtraction). This matches the offline HTML report exactly (~10,437),
+    # so dashboard D-1 read directly from stored row = trusted report value.
+    # See feedback_userbase_raw_name_keying memory.
+    try:
+        def _n_mob(v):
+            if v is None: return ""
+            s = str(v).strip().replace(" ", "").replace("-", "")
+            if s.endswith(".0"): s = s[:-2]
+            if s.startswith("+91"): s = s[3:]
+            elif s.startswith("91") and len(s) == 12: s = s[2:]
+            elif s.startswith("0"): s = s.lstrip("0")
+            return s
+
+        # u2_total_raw: raw lowercase Partner name, unique (mobile, name) pairs
+        u2_total_raw = {}
+        u2_all_mobs_raw = set()
+        _seen_pairs = set()
+        for row in u2_rows:
+            _mm = _n_mob(row.get("Mobile no") or row.get("Mobile"))
+            _pn = str(row.get("Partner") or "").strip().lower()
+            if not _mm or not _pn: continue
+            u2_all_mobs_raw.add(_mm)
+            if (_mm, _pn) in _seen_pairs: continue
+            _seen_pairs.add((_mm, _pn))
+            u2_total_raw[_pn] = u2_total_raw.get(_pn, 0) + 1
+
+        # shifted_by_key: mobile in Main sheet AND in PX Raw (any type),
+        # first-occurrence attribution to PX Raw partner name
+        _raw = px_book.worksheet(PX_RAW_TAB).get_all_values()
+        _rh = [x.strip() for x in _raw[0]]
+        _rl = next((i for i, x in enumerate(_rh) if not x), len(_rh))
+        _rh = _rh[:_rl]
+        _i_rm = _rh.index("customer_number"); _i_epn = _rh.index("exit_partner_name")
+        shifted_by_key = {}
+        _seen_shift = set()
+        for row in _raw[1:]:
+            if len(row) < _rl: continue
+            _mm = _n_mob(row[_i_rm])
+            _pn = str(row[_i_epn]).strip().lower()
+            if not _mm or not _pn: continue
+            if _mm not in u2_all_mobs_raw: continue
+            if _mm in _seen_shift: continue
+            _seen_shift.add(_mm)
+            shifted_by_key[_pn] = shifted_by_key.get(_pn, 0) + 1
+
+        # u1_by_raw: raw lowercase name aggregation (no alias) — matches report
+        u1_by_raw = {}
+        for row in u1_rows:
+            nm = str(row.get("Exit Partner Name") or "").strip().lower()
+            if not nm: continue
+            u1_by_raw.setdefault(nm, {"total": 0})
+            u1_by_raw[nm]["total"] += _to_int(row.get("Total U1 User"))
+
+        def _cohort_userbase_live(cohort):
+            keys = {p["name"].lower() for p in cohort}
+            md_u1 = sum(u1_by_raw.get(k, {}).get("total", 0) for k in keys)
+            shifted = sum(shifted_by_key.get(k, 0) for k in keys)
+            u2 = sum(u2_total_raw.get(k, 0) for k in keys)
+            return max(0, md_u1 - shifted) + u2
+
+        _s1_live = _cohort_userbase_live(in_pipeline)
+        _s3_live = _cohort_userbase_live(past_s3)
+        print(f"[live-formula] s1_userbase: {s1_userbase:,} -> {_s1_live:,}")
+        print(f"[live-formula] s3_userbase: {s3_userbase:,} -> {_s3_live:,}")
+        s1_userbase = _s1_live
+        s3_userbase = _s3_live
+    except Exception as _e:
+        print(f"[live-formula] override failed ({_e}) — keeping raw formula values")
+
     totals = {
         "s1_csps": s1_csps, "s1_userbase": s1_userbase,
         "s1_voluntary": s1_voluntary, "s1_b1": s1_b1, "s1_b2": s1_b2,

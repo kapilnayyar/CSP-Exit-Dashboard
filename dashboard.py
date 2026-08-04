@@ -2715,42 +2715,12 @@ def render():
     if _baseline:
         yest_totals = _baseline
 
-    # Kapil 2026-08-04: preserve real day-over-day userbase deltas.
-    # Prior behavior (2026-07-30) copied today's live compute into yest_totals
-    # for U1/userbase fields, forcing delta=0. That correctly hid phantom
-    # deltas from cron-formula-vs-live-formula noise, but ALSO hid real
-    # activity (e.g., new pickups shifting userbase down, new customers
-    # entering the exit cohort shifting it up).
-    # New behavior: keep D0 as today's live compute (matches cohort math),
-    # and calibrate D-1 = D0 − raw_row_delta where raw_row_delta is the
-    # activity delta captured in Daily Totals rows (same-formula → real move).
-    # Fields NOT touched: pickup counts, S5/S6 — those already show real deltas.
-    _prev_row = None
-    if yest_totals:
-        _bd_str = yest_totals.get("date", "")
-        try:
-            _bd_dt = datetime.strptime(_bd_str, "%Y-%m-%d").date()
-            _pd_str = (_bd_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-            _prev_row = next(
-                (r for r in _all_rows_sorted if r.get("date") == _pd_str),
-                None,
-            )
-        except (ValueError, TypeError):
-            _prev_row = None
-
-    if yest_totals and today_metrics:
-        for _fld in ("s1_userbase", "s2_userbase", "s3_userbase",
-                     "s4a_u1_total", "s4a_u1_mig",
-                     "s4b_u1", "s4b_u1_mig",
-                     "s4a_userbase", "s4b_userbase"):
-            if _fld not in today_metrics:
-                continue
-            _live = today_metrics[_fld]
-            _raw_now = _to_int(yest_totals.get(_fld))
-            _raw_prev = _to_int(_prev_row.get(_fld)) if _prev_row else _raw_now
-            _raw_delta = _raw_now - _raw_prev
-            # D0 = live; D-1 = live - raw_delta → displayed delta = raw_delta
-            yest_totals[_fld] = _live - _raw_delta
+    # Kapil 2026-08-04 (final): no more override. yest_totals reads directly
+    # from Daily Totals row. That row now stores LIVE-formula values (per
+    # Kapil's rule — matches offline report exactly). Delta = today's live -
+    # stored yesterday's live = real activity delta.
+    # Prior overrides removed. See feedback_userbase_raw_name_keying memory.
+    pass
 
     # ── Cron heartbeat: warn if today's business-day cron row is missing ──
     # A row for the current business day should exist by 02:45 IST (after
