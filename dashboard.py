@@ -1894,10 +1894,10 @@ def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str=""):
         "STAGE 5  —  RECONCILIATION (FNF process)", STAGE_COLORS["S5"],
         [
             ("CSPs", m['s5_csps'], fmt_pct(m['s5_csps'], m['s1_csps']), yd("s5_csps")),
-            ("Netbox at CSPs", m['s5_idle'], fmt_pct(m['s5_idle'], m['s5_liability']), yd("s5_idle")),
-            ("Could not pick (deduped)", m['s5_could_not_pick'], fmt_pct(m['s5_could_not_pick'], m['s5_liability']), yd("s5_could_not_pick")),
-            ("Total Netbox Liability", m['s5_liability'], "100.0%", yd("s5_liability")),
-            ("Total Netbox Collected from CSP", m['s5_collected'], fmt_pct(m['s5_collected'], m['s5_liability']), yd("s5_collected")),
+            ("Idle Netboxes at CSPs", m['s5_idle'], fmt_pct(m['s5_idle'], m['s5_liability']), yd("s5_idle")),
+            ("Netboxes Could Not Pick — U1+U2 (after dedup from idle)", m['s5_could_not_pick'], fmt_pct(m['s5_could_not_pick'], m['s5_liability']), yd("s5_could_not_pick")),
+            ("Total Netbox Liability at CSPs (2 + 3)", m['s5_liability'], "100.0%", yd("s5_liability")),
+            ("Total Netboxes Recovered from CSPs (out of liability)", m['s5_collected'], fmt_pct(m['s5_collected'], m['s5_liability']), yd("s5_collected")),
         ]
     ), unsafe_allow_html=True)
     # Freshness caption — cron is the S5 source of truth (2026-07-03).
@@ -1925,7 +1925,7 @@ def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str=""):
         [
             ("CSPs", m['s6_csps'], fmt_pct(m['s6_csps'], m['s1_csps']), yd("s6_csps")),
             ("Netbox at CSP", m['s6_idle'], fmt_pct(m['s6_idle'], s6_total_dev) if s6_total_dev else "0.0%", yd("s6_idle")),
-            ("Total Netbox Collected from CSP", m['s6_collected'], fmt_pct(m['s6_collected'], s6_total_dev) if s6_total_dev else "0.0%", yd("s6_collected")),
+            ("Total Netboxes Recovered from CSPs (out of liability)", m['s6_collected'], fmt_pct(m['s6_collected'], s6_total_dev) if s6_total_dev else "0.0%", yd("s6_collected")),
         ]
     ), unsafe_allow_html=True)
 
@@ -2235,12 +2235,12 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     )
     st.markdown(stage_card("STAGE 5  —  RECONCILIATION (FNF process)", STAGE_COLORS["S5"], [
         ("CSPs", len(s5_partners), fmt_pct(len(s5_partners), s1_csps)),
-        ("Netbox at CSPs", idle_total, fmt_pct(idle_total, s5_liability)),
-        ("Could not pick (U1+U2 pending)", s5_could_not_pick_raw, fmt_pct(s5_could_not_pick_raw, s5_liability)),
+        ("Idle Netboxes at CSPs", idle_total, fmt_pct(idle_total, s5_liability)),
+        ("Could not pick (U1+U2 pending, raw before dedup)", s5_could_not_pick_raw, fmt_pct(s5_could_not_pick_raw, s5_liability)),
         ("Duplicates U2 (pending customer's netbox already at CSP)", dup, fmt_pct(dup, s5_could_not_pick_raw)),
-        ("Could not pick deduped", s5_could_not_pick, fmt_pct(s5_could_not_pick, s5_liability)),
-        ("Total Netbox Liability", s5_liability, "100.0%"),
-        ("Total Netbox Collected from CSP", s5_devices_collected, fmt_pct(s5_devices_collected, s5_liability)),
+        ("Netboxes Could Not Pick — U1+U2 (after dedup from idle)", s5_could_not_pick, fmt_pct(s5_could_not_pick, s5_liability)),
+        ("Total Netbox Liability at CSPs (2 + 3)", s5_liability, "100.0%"),
+        ("Total Netboxes Recovered from CSPs (out of liability)", s5_devices_collected, fmt_pct(s5_devices_collected, s5_liability)),
     ]), unsafe_allow_html=True)
 
     # ── S6 — Complete ────────────────────────────────────────────────────────
@@ -2257,7 +2257,7 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
         st.markdown(stage_card("STAGE 6  —  COMPLETE", STAGE_COLORS["S6"], [
             ("CSPs", s6_csps, fmt_pct(s6_csps, s1_csps)),
             ("Netbox at CSP", idle_total_s6, s6_at_pct),
-            ("Total Netbox Collected from CSP", s6_collected, s6_col_pct),
+            ("Total Netboxes Recovered from CSPs (out of liability)", s6_collected, s6_col_pct),
         ]), unsafe_allow_html=True)
 
 
