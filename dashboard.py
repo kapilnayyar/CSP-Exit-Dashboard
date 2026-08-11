@@ -2098,7 +2098,7 @@ def render_tab6_99_funnel(partners, u1_by, u2_total, u2_picked,
 
 
 
-def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup, idle_total_s6=0, netbox_collected_by_code=None):
+def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup, idle_total_s6=0, netbox_collected_by_code=None, shared_s5=None):
     """Tab 2 — funnel. S1/S2/S3 are cumulative; S4a/S4b/S5/S6 are current snapshots.
     % computed against S1 totals."""
     by_state = defaultdict(list)
@@ -2216,6 +2216,9 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     ]), unsafe_allow_html=True)
 
     # ── S5 — Reconciliation (Netbox metrics) ─────────────────────────────────
+    # Kapil 2026-08-11: use shared_s5 (same set-based math as Tab 5) so this
+    # tab's Row 2/3/4 match Tab 5 exactly. Legacy count-based numbers kept
+    # as auxiliary rows for diagnostic transparency.
     s5_u1_total = s5_u1_mig = s5_u2_total = s5_u2_picked = 0
     for p in s5_partners:
         u1d = _u1_for(p, u1_by)
@@ -2224,8 +2227,15 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
         s5_u2_picked += _u2_picked_for(p, u2_picked)
     s5_could_not_pick_raw = (s5_u1_total - s5_u1_mig) + (s5_u2_total - s5_u2_picked)
     dup = s5_dedup.get("duplicates", 0)
-    s5_could_not_pick = max(s5_could_not_pick_raw - dup, 0)
-    s5_liability = idle_total + s5_could_not_pick
+
+    if shared_s5:
+        s5_idle_display = shared_s5["s5_idle"]
+        s5_could_not_pick = shared_s5["s5_could_not_pick"]
+        s5_liability = shared_s5["s5_liability"]
+    else:
+        s5_idle_display = idle_total
+        s5_could_not_pick = max(s5_could_not_pick_raw - dup, 0)
+        s5_liability = idle_total + s5_could_not_pick
 
     # Netbox collected from CSP for S5 partners — from "S5 Netbox Collection" tab
     netbox_collected_by_code = netbox_collected_by_code or {}
@@ -2235,8 +2245,8 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     )
     st.markdown(stage_card("STAGE 5  —  RECONCILIATION (FNF process)", STAGE_COLORS["S5"], [
         ("CSPs", len(s5_partners), fmt_pct(len(s5_partners), s1_csps)),
-        ("Idle Netboxes at CSPs", idle_total, fmt_pct(idle_total, s5_liability)),
-        ("Could not pick (U1+U2 pending, raw before dedup)", s5_could_not_pick_raw, fmt_pct(s5_could_not_pick_raw, s5_liability)),
+        ("Idle Netboxes at CSPs", s5_idle_display, fmt_pct(s5_idle_display, s5_liability)),
+        ("Could not pick (U1+U2 pending, raw count — diagnostic)", s5_could_not_pick_raw, fmt_pct(s5_could_not_pick_raw, s5_liability)),
         ("Duplicates U2 (pending customer's netbox already at CSP)", dup, fmt_pct(dup, s5_could_not_pick_raw)),
         ("Netboxes Could Not Pick — U1+U2 (after dedup from idle)", s5_could_not_pick, fmt_pct(s5_could_not_pick, s5_liability)),
         ("Total Netbox Liability at CSPs (2 + 3)", s5_liability, "100.0%"),
@@ -2761,6 +2771,7 @@ def render():
         render_tab2_funnel(
             partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total,
             s5_dedup, idle_total_s6, netbox_collected_by_code,
+            shared_s5=_shared_s5,
         )
     with tab3:
         render_tab3_data_quality(partners, u1_by, u2_total, r15_by)

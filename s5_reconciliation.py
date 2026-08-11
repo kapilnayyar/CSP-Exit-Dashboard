@@ -218,6 +218,7 @@ def load_main_sheet_u2(ws, name_to_owner_code, losers):
     total_by_code = defaultdict(int)
     picked_by_code = defaultdict(int)
     pending_mobiles_by_code = defaultdict(set)
+    picked_mobiles_by_code = defaultdict(set)  # Kapil 2026-08-11: needed for U2-wins-over-U1 rule
 
     for r in rows:
         if len(r) <= max(c_partner, c_mobile):
@@ -234,9 +235,11 @@ def load_main_sheet_u2(ws, name_to_owner_code, losers):
         prd = str(r[c_pradeep]).strip().lower() if c_pradeep is not None and len(r) > c_pradeep else ""
         if rem == "device picked up" or prd == "yes":
             picked_by_code[code] += 1
+            picked_mobiles_by_code[code].add(mobile)
         else:
             pending_mobiles_by_code[code].add(mobile)
-    return dict(total_by_code), dict(picked_by_code), dict(pending_mobiles_by_code)
+    return (dict(total_by_code), dict(picked_by_code),
+            dict(pending_mobiles_by_code), dict(picked_mobiles_by_code))
 
 
 def load_px_migration(px_book, name_to_owner_code, losers, s5s6_codes):
@@ -482,8 +485,9 @@ def compute_s5_snapshot(*, sb_url, sb_key, requests_module,
         for code in s5s6_codes
     }
 
-    # 5. Main sheet — U2 totals, picked, pending mobiles
-    u2_total_by_code, u2_picked_by_code, u2_pending_mobiles_by_code = load_main_sheet_u2(
+    # 5. Main sheet — U2 totals, picked, pending mobiles, picked mobiles
+    (u2_total_by_code, u2_picked_by_code,
+     u2_pending_mobiles_by_code, u2_picked_mobiles_by_code) = load_main_sheet_u2(
         exit_book.worksheet(MAIN_TAB), name_to_owner_code, losers,
     )
     u2_pending_count_by_code = {
@@ -504,6 +508,10 @@ def compute_s5_snapshot(*, sb_url, sb_key, requests_module,
     for code in s5s6_codes:
         all_pending_mobiles |= u1_pending_mobiles_by_code.get(code, set())
         all_pending_mobiles |= u2_pending_mobiles_by_code.get(code, set())
+        # Kapil 2026-08-11: also resolve picked U2 mobiles' devices so the
+        # U2-wins-over-U1 rule can identify U1 mobiles whose device is
+        # already attributed to a picked U2 mobile.
+        all_pending_mobiles |= u2_picked_mobiles_by_code.get(code, set())
     mobile_to_device = load_mobile_to_device_id(
         mb_query_fn, list(all_pending_mobiles),
     )
@@ -518,25 +526,33 @@ def compute_s5_snapshot(*, sb_url, sb_key, requests_module,
     # Per Kapil's spec Step 5: "If the same Device ID appears in BOTH Step 3
     # (customer-side) and Step 4 (IDLE at partner) — count it only once
     # (once IDLE, prefer that)."
+    # Kapil's rule (2026-08-11): if a device_id appears in BOTH U1 (PX Raw)
+    # AND U2 (Main sheet) at the same partner, attribute it to U2 ONLY.
+    # If the U2 mobile is picked, the device must leave the liability pool
+    # entirely — U1 side must NOT retain it via its own copy of the mobile.
+    # Formula: customer_devs = (u1_devs − u2_all_devs) ∪ u2_pending_devs
+    # where u2_all_devs = U2 device_ids at partner (picked + unpicked).
     customer_side_device_ids_by_code = {}
     customer_only_device_ids_by_code = {}
     u1_dedup_by_code = {}
     u2_dedup_by_code = {}
     for code in s5s6_codes:
         idle_devs = idle_device_ids_by_code.get(code, set())
-        # Customer-side device ids (from U1 pending + U2 pending, dedup by
-        # mobile → device_id)
         u1_mobiles = u1_pending_mobiles_by_code.get(code, set())
-        u2_mobiles = u2_pending_mobiles_by_code.get(code, set())
+        u2_pending_mobiles = u2_pending_mobiles_by_code.get(code, set())
+        u2_picked_mobiles = u2_picked_mobiles_by_code.get(code, set())
         u1_devs = {mobile_to_device[m] for m in u1_mobiles if m in mobile_to_device}
-        u2_devs = {mobile_to_device[m] for m in u2_mobiles if m in mobile_to_device}
-        customer_devs = u1_devs | u2_devs
+        u2_pending_devs = {mobile_to_device[m] for m in u2_pending_mobiles if m in mobile_to_device}
+        u2_picked_devs = {mobile_to_device[m] for m in u2_picked_mobiles if m in mobile_to_device}
+        u2_all_devs = u2_pending_devs | u2_picked_devs
+        # Kapil's rule: U1 side excludes any device already attributed to U2
+        u1_kapil_devs = u1_devs - u2_all_devs
+        customer_devs = u1_kapil_devs | u2_pending_devs
         customer_side_device_ids_by_code[code] = customer_devs
-        # Cross-dedup: drop customer-side devices that are already idle
         customer_only_device_ids_by_code[code] = customer_devs - idle_devs
-        # Per-bucket dedup for diagnostics
-        u1_dedup_by_code[code] = len(u1_devs & idle_devs)
-        u2_dedup_by_code[code] = len(u2_devs & idle_devs)
+        # Per-bucket dedup for diagnostics (u1 uses kapil-filtered set)
+        u1_dedup_by_code[code] = len(u1_kapil_devs & idle_devs)
+        u2_dedup_by_code[code] = len(u2_pending_devs & idle_devs)
 
     # 9. S5 aggregates (S6 handled separately)
     s5_idle = sum(idle_count_by_code.get(c, 0) for c in s5_codes)
