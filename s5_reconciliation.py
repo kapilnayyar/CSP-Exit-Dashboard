@@ -1,5 +1,6 @@
 """S5 Reconciliation — single source of truth for cnp / dedup / liability.
 Force redeploy 2026-08-11: Streamlit Cloud missed 2df149d rebuild.
+Force redeploy 2026-08-17: Streamlit Cloud missed 18171c8 rebuild (S6 override).
 
 Called by:
 - capture_daily_snapshot.py  (nightly cron at 23:30 IST)
