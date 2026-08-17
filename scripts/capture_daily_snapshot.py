@@ -28,7 +28,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _PARENT = os.path.dirname(_HERE)
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
-from s5_reconciliation import compute_s5_snapshot, PX_MIGRATION_WORKBOOK_ID  # noqa: E402
+from s5_reconciliation import compute_s5_snapshot, PX_MIGRATION_WORKBOOK_ID, MANUAL_S6_OVERRIDE  # noqa: E402
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -295,6 +295,20 @@ def main():
     partners = [p for p in r.json()
                 if int(p.get("partner_code") or 0) not in EXCLUDED_PARTNER_CODES]
     print(f"Partners fetched: {len(partners)}")
+
+    # Kapil 2026-08-17: apply MANUAL_S6_OVERRIDE — CSPs whose FnF is done
+    # operationally but who are kept as S5 in Exit OS (Supabase) show as S6
+    # in the CSP Exit Tracker. In-memory mutation only; Supabase untouched.
+    # This mirrors the same override in s5_reconciliation.compute_s5_snapshot
+    # so that s5_csps / s6_csps counts (computed locally in this script from
+    # `partners`) also reflect the override.
+    _s6_moved_local = []
+    for p in partners:
+        if str(p.get("partner_code")) in MANUAL_S6_OVERRIDE and p.get("current_state") == "S5":
+            p["current_state"] = "S6"
+            _s6_moved_local.append(str(p.get("partner_code")))
+    if _s6_moved_local:
+        print(f"[MANUAL_S6_OVERRIDE, local partners] moved {len(_s6_moved_local)} S5→S6: {_s6_moved_local}")
 
     # ── 4. Google Sheet: U1 (Migration Data) + U2 (Main sheet) ─────────────
     # _read_records_safe tolerates trailing empty columns (otherwise gspread's
