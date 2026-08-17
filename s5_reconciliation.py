@@ -57,6 +57,19 @@ EXCLUDED_PARTNER_CODES = {
     281749854779178,
 }
 
+# Kapil 2026-08-17: MANUAL S6 attribution for CSP Exit Tracker display only.
+# These CSPs have completed FnF settlement operationally but their state in
+# Exit OS (Supabase) is intentionally kept at S5. Dashboard/reports show S6.
+# NEVER update Supabase for these — Kapil manages Exit OS separately.
+# Add new codes here when a CSP completes FnF but should stay as S5 in Exit OS.
+MANUAL_S6_OVERRIDE = {
+    "281749854627642",  # Karan Net Cable (moved 2026-08-11 dashboard-only)
+    "281749854690476",  # ULTRANET TECHNOLOGY PRIVATE LIMITED (2026-08-11)
+    "274877938291",     # Prem Cable TV Network (2026-08-11)
+    "281749854827302",  # SM Cables Network (2026-08-17)
+    "281749854824790",  # SAIRAJ BROADBAND (2026-08-17)
+}
+
 # Two workbook IDs
 CSP_EXIT_WORKBOOK_ID_ENV = "GOOGLE_SHEET_ID"  # set via env
 PX_MIGRATION_WORKBOOK_ID = "1hmT50leXZUAibzd2zzfO4FVj-B3m675CCFUbdwFuVS4"
@@ -456,6 +469,19 @@ def compute_s5_snapshot(*, sb_url, sb_key, requests_module,
     """
     # 1. Load ALL partners (all states) for the collision resolver, then split
     all_partners = load_all_partners(sb_url, sb_key, requests_module)
+
+    # Kapil 2026-08-17: apply MANUAL_S6_OVERRIDE — partners whose FnF is done
+    # operationally but who are kept as S5 in Exit OS (Supabase) are shown as
+    # S6 in the CSP Exit Tracker (dashboard + snapshot + reports). In-memory
+    # mutation only; Supabase remains untouched.
+    _moved = []
+    for p in all_partners:
+        if str(p.get("partner_code")) in MANUAL_S6_OVERRIDE and p.get("current_state") == "S5":
+            p["current_state"] = "S6"
+            _moved.append(str(p.get("partner_code")))
+    if _moved and verbose:
+        print(f"[MANUAL_S6_OVERRIDE] moved {len(_moved)} partners S5→S6: {_moved}")
+
     s5_partners = [p for p in all_partners if p.get("current_state") == "S5"]
     s6_partners = [p for p in all_partners if p.get("current_state") == "S6"]
     if verbose:
