@@ -2465,6 +2465,19 @@ def render():
         partners = fetch_partners(secrets["supabase_url"], secrets["supabase_key"])
         netbox_collected_by_code = fetch_netbox_collection(secrets["sheet_id"], secrets["gcp_creds"])
 
+    # Kapil 2026-08-17: MANUAL_S6_OVERRIDE — 5 CSPs kept as S5 in Exit OS but
+    # shown as S6 in CSP Exit Tracker. In-memory only; Supabase untouched.
+    # Must be applied here BEFORE by_state partition in compute_today_metrics
+    # (which drives Tab 5's s5_csps/s6_csps counts).
+    from s5_reconciliation import MANUAL_S6_OVERRIDE as _MANUAL_S6
+    _moved = []
+    for _p in partners:
+        if str(_p.get("partner_code")) in _MANUAL_S6 and _p.get("current_state") == "S5":
+            _p["current_state"] = "S6"
+            _moved.append(str(_p.get("partner_code")))
+    if _moved:
+        print(f"[MANUAL_S6_OVERRIDE, dashboard] moved {len(_moved)} S5→S6: {_moved}")
+
     u2 = classify_u2(u2_rows)
     u1 = classify_u1(u1_rows)
     u1_by, u2_total, u2_picked = build_sheet_lookups(u1_rows, u2_rows)
