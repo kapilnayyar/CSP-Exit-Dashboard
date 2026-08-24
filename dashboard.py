@@ -2114,9 +2114,15 @@ def render_tab6_99_funnel(partners, u1_by, u2_total, u2_picked,
 
 
 
-def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup, idle_total_s6=0, netbox_collected_by_code=None, shared_s5=None):
+def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total, s5_dedup, idle_total_s6=0, netbox_collected_by_code=None, shared_s5=None, today_metrics=None):
     """Tab 2 — funnel. S1/S2/S3 are cumulative; S4a/S4b/S5/S6 are current snapshots.
-    % computed against S1 totals."""
+    % computed against S1 totals.
+
+    Kapil 2026-08-24: Userbase and S4a/S4b metrics now come from today_metrics
+    (Kapil-rule cohort compute) so Tab 2 matches Tab 5 and offline reports.
+    Previously used count-based sheet_userbase_of that double-counted
+    customers across U1+U2 sources.
+    """
     by_state = defaultdict(list)
     for p in partners:
         by_state[p["current_state"]].append(p)
@@ -2124,25 +2130,27 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     def r15_of(p):
         return r15_by_code.get(str(p.get("partner_code") or ""), 0)
 
-    def sheet_userbase_of(p):
-        """U1+U2 total for this partner from Google Sheet (0 if not in sheet)."""
-        key = p["name"].lower()
-        u1 = u1_by.get(key, {}).get("total", 0) or 0
-        u2 = u2_total.get(key, 0) or 0
-        return u1 + u2
-
-    def userbase_of(p):
-        """Sheet first; R15 fallback when CSP is not in sheet."""
-        sheet = sheet_userbase_of(p)
-        return sheet if sheet > 0 else r15_of(p)
-
     # ── Cumulative pools (S1, S3) + current-state pools (S2) ─────────────────
     in_pipeline = [p for p in partners if p.get("current_state") in ("S1","S2","S3","S4","S5","S6")]
     current_s2 = by_state.get("S2", [])  # only CSPs currently serving notice
     past_s3 = [p for p in in_pipeline if p["current_state"] in ("S3","S4","S5","S6")]
 
     s1_csps = len(in_pipeline)
-    s1_userbase = sum(userbase_of(p) for p in in_pipeline)
+    # Kapil-rule userbase (same as Tab 5 / offline reports). Fallback to raw
+    # sheet sum only if today_metrics unavailable (edge case).
+    if today_metrics:
+        s1_userbase = today_metrics.get("s1_userbase", 0)
+    else:
+        # Legacy fallback — count-based (may show inflated numbers)
+        def sheet_userbase_of(p):
+            key = p["name"].lower()
+            u1 = u1_by.get(key, {}).get("total", 0) or 0
+            u2 = u2_total.get(key, 0) or 0
+            return u1 + u2
+        def userbase_of(p):
+            sheet = sheet_userbase_of(p)
+            return sheet if sheet > 0 else r15_of(p)
+        s1_userbase = sum(userbase_of(p) for p in in_pipeline)
 
     # ── S1 — Total in exit ───────────────────────────────────────────────────
     s1_voluntary = sum(1 for p in in_pipeline if str(p.get("exit_type") or "").strip() == "Voluntary")
@@ -2176,7 +2184,7 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
 
     # ── S2 — Currently serving notice period ─────────────────────────────────
     s2_csps = len(current_s2)
-    s2_userbase = sum(userbase_of(p) for p in current_s2)
+    s2_userbase = today_metrics.get("s2_userbase", 0) if today_metrics else sum(userbase_of(p) for p in current_s2)
     st.markdown(stage_card("STAGE 2  —  NOTICE PERIOD (currently serving)", STAGE_COLORS["S2"], [
         ("CSPs", s2_csps, fmt_pct(s2_csps, s1_csps)),
         ("Userbase", s2_userbase, fmt_pct(s2_userbase, s1_userbase)),
@@ -2184,7 +2192,7 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
 
     # ── S3 — Got blocked ─────────────────────────────────────────────────────
     s3_csps = len(past_s3)
-    s3_userbase = sum(userbase_of(p) for p in past_s3)
+    s3_userbase = today_metrics.get("s3_userbase", 0) if today_metrics else sum(userbase_of(p) for p in past_s3)
     st.markdown(stage_card("STAGE 3  —  BLOCKING", STAGE_COLORS["S3"], [
         ("CSPs", s3_csps, fmt_pct(s3_csps, s1_csps)),
         ("Userbase", s3_userbase, fmt_pct(s3_userbase, s1_userbase)),
@@ -2263,7 +2271,7 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
         ("CSPs", len(s5_partners), fmt_pct(len(s5_partners), s1_csps)),
         ("Idle Netboxes at CSPs", s5_idle_display, fmt_pct(s5_idle_display, s5_liability)),
         ("Could not pick (U1+U2 pending, raw count — diagnostic)", s5_could_not_pick_raw, fmt_pct(s5_could_not_pick_raw, s5_liability)),
-        ("Duplicates U2 (pending customer's netbox already at CSP)", dup, fmt_pct(dup, s5_could_not_pick_raw)),
+        ("Dedup U1+U2 (pending customer's netbox already in idle bucket)", dup, fmt_pct(dup, s5_could_not_pick_raw)),
         ("Netboxes Could Not Pick — U1+U2 (after dedup from idle)", s5_could_not_pick, fmt_pct(s5_could_not_pick, s5_liability)),
         ("Total Netbox Liability at CSPs (2 + 3)", s5_liability, "100.0%"),
         ("Total Netboxes Recovered from CSPs (out of liability)", s5_devices_collected, fmt_pct(s5_devices_collected, s5_liability)),
@@ -2801,6 +2809,7 @@ def render():
             partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total,
             s5_dedup, idle_total_s6, netbox_collected_by_code,
             shared_s5=_shared_s5,
+            today_metrics=today_metrics,
         )
     with tab3:
         render_tab3_data_quality(partners, u1_by, u2_total, r15_by)
