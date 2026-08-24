@@ -955,33 +955,32 @@ AMBER = "#FFEB9C"
 RED = "#F8CBAD"
 
 
-def render_tab1_status(u1, u2, s1_userbase_kapil=None):
-    """Tab 1 — the original 5-table view (Status & Cohorts).
+def render_tab1_status(u1, u2, s1_userbase_kapil=None, shifted_total=None, u2_pairs_total=None):
+    """Tab 1 — Status & Cohorts.
 
-    Kapil 2026-08-24: Total Userbase now shows the Kapil-rule S1 cohort
-    userbase (matches Tab 5 + offline reports exactly). Previously showed
-    raw u1_total + u2_total which double-counts customers appearing in
-    both Migration Data (U1) and Main sheet (U2).
+    Kapil 2026-08-24: Table 1 now shows the Kapil-rule formula step-by-step:
+      MD U1 raw − Shifted to U2 = U1 Remaining
+      U1 Remaining + U2 Unique Pairs = Total Userbase
+    Matches Tab 5 and offline HTML reports exactly. Tables 2-5 keep raw
+    source breakdowns for diagnostic detail.
     """
-    # U1 remaining + U2 pairs — same formula as Tab 5 / offline reports
-    if s1_userbase_kapil is not None:
-        grand_total = s1_userbase_kapil
-        # Split view: what portion is U1-remaining vs U2-pairs
-        u2_share = u2["total"]  # keep raw U2 pair count as the "U2 side"
-        u1_share = max(0, grand_total - u2_share)
-    else:
-        grand_total = u1["total"] + u2["total"]
-        u1_share = u1["total"]
-        u2_share = u2["total"]
+    md_u1_raw = u1["total"]                      # raw Migration Data total
+    shifted = shifted_total if shifted_total is not None else 0
+    u1_remaining = max(0, md_u1_raw - shifted)
+    u2_pairs = u2_pairs_total if u2_pairs_total is not None else u2["total"]
+    grand_total = (s1_userbase_kapil if s1_userbase_kapil is not None
+                   else u1_remaining + u2_pairs)
 
     u1_pending = u1["not_migrated"] + u1["in_process"]
     u2_not_team = u2["partner"] + u2["swu"]
 
-    # ── Table 1: Total Userbase — U1 vs U2 Bifurcation ───────────────────────
-    html = table_header("Total Userbase — U1 vs U2 Bifurcation")
+    # ── Table 1: Total Userbase — Kapil-rule formula ─────────────────────────
+    html = table_header("Total Userbase — Kapil-rule formula (matches Tab 5 & offline reports)")
     html += open_table()
-    html += row(1, "U1 — Migration (remaining after U2 shift)", u1_share, pct(u1_share, grand_total))
-    html += row(2, "U2 — Device Pickup", u2_share, pct(u2_share, grand_total))
+    html += row(1, "U1 (Migration Data raw total)", md_u1_raw, pct(md_u1_raw, grand_total))
+    html += row(2, "(−) Shifted to U2 (same customer now in Main sheet)", shifted, "—")
+    html += row(3, "U1 Remaining", u1_remaining, pct(u1_remaining, grand_total))
+    html += row(4, "U2 Unique Pairs (Main sheet, deduped)", u2_pairs, pct(u2_pairs, grand_total))
     html += total_row("Total Userbase", grand_total)
     html += close_table()
     st.markdown(html, unsafe_allow_html=True)
@@ -2803,7 +2802,12 @@ def render():
         "Daily Funnel + Delta", "99 CSP Exit Funnel",
     ])
     with tab1:
-        render_tab1_status(u1, u2, s1_userbase_kapil=today_metrics.get("s1_userbase"))
+        _shifted_total = sum(shifted_by_key.values()) if shifted_by_key else 0
+        _u2_pairs_total = sum(u2_total_raw.values()) if u2_total_raw else sum(u2_total.values())
+        render_tab1_status(u1, u2,
+                           s1_userbase_kapil=today_metrics.get("s1_userbase"),
+                           shifted_total=_shifted_total,
+                           u2_pairs_total=_u2_pairs_total)
     with tab2:
         render_tab2_funnel(
             partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total,
