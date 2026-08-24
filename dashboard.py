@@ -955,17 +955,33 @@ AMBER = "#FFEB9C"
 RED = "#F8CBAD"
 
 
-def render_tab1_status(u1, u2):
-    """Tab 1 — the original 5-table view (Status & Cohorts)."""
-    grand_total = u1["total"] + u2["total"]
+def render_tab1_status(u1, u2, s1_userbase_kapil=None):
+    """Tab 1 — the original 5-table view (Status & Cohorts).
+
+    Kapil 2026-08-24: Total Userbase now shows the Kapil-rule S1 cohort
+    userbase (matches Tab 5 + offline reports exactly). Previously showed
+    raw u1_total + u2_total which double-counts customers appearing in
+    both Migration Data (U1) and Main sheet (U2).
+    """
+    # U1 remaining + U2 pairs — same formula as Tab 5 / offline reports
+    if s1_userbase_kapil is not None:
+        grand_total = s1_userbase_kapil
+        # Split view: what portion is U1-remaining vs U2-pairs
+        u2_share = u2["total"]  # keep raw U2 pair count as the "U2 side"
+        u1_share = max(0, grand_total - u2_share)
+    else:
+        grand_total = u1["total"] + u2["total"]
+        u1_share = u1["total"]
+        u2_share = u2["total"]
+
     u1_pending = u1["not_migrated"] + u1["in_process"]
     u2_not_team = u2["partner"] + u2["swu"]
 
     # ── Table 1: Total Userbase — U1 vs U2 Bifurcation ───────────────────────
     html = table_header("Total Userbase — U1 vs U2 Bifurcation")
     html += open_table()
-    html += row(1, "U1 — Migration", u1["total"], pct(u1["total"], grand_total))
-    html += row(2, "U2 — Device Pickup", u2["total"], pct(u2["total"], grand_total))
+    html += row(1, "U1 — Migration (remaining after U2 shift)", u1_share, pct(u1_share, grand_total))
+    html += row(2, "U2 — Device Pickup", u2_share, pct(u2_share, grand_total))
     html += total_row("Total Userbase", grand_total)
     html += close_table()
     st.markdown(html, unsafe_allow_html=True)
@@ -2779,7 +2795,7 @@ def render():
         "Daily Funnel + Delta", "99 CSP Exit Funnel",
     ])
     with tab1:
-        render_tab1_status(u1, u2)
+        render_tab1_status(u1, u2, s1_userbase_kapil=today_metrics.get("s1_userbase"))
     with tab2:
         render_tab2_funnel(
             partners, u1_by, u2_total, u2_picked, r15_by_code, idle_total,
