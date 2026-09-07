@@ -69,6 +69,7 @@ MANUAL_S6_OVERRIDE = {
     "274877938291",     # Prem Cable TV Network (2026-08-11)
     "281749854827302",  # SM Cables Network (2026-08-17)
     "281749854824790",  # SAIRAJ BROADBAND (2026-08-17)
+    "281749854741756",  # Ayushi Cable Network (2026-09-04)
 }
 
 # Two workbook IDs
