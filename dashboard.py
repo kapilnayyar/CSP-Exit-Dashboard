@@ -1979,8 +1979,6 @@ def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str=""):
         f"• S4 completed: Migration of {m['s4a_u1_mig']:,} U1 customers{_delta_inline('s4a_u1_mig')} with {u1_conv} conversion and {m['s4a_u2_pick']:,} U2 customers{_delta_inline('s4a_u2_pick')} Device picked up with {u2_conv} conversion for {m['s4a_csps']:,} CSPs.",
         f"• S4 in process: Migration Done for {m['s4b_u1_mig']:,} U1 customers{_delta_inline('s4b_u1_mig')} and Netbox Pickup Done for {m['s4b_u2_pick']:,} U2 customers{_delta_inline('s4b_u2_pick')} across {m['s4b_csps']:,} CSPs.",
         f"• {m['s6_csps']:,} {csp_word} has successfully reached S6 with {s6_liability_text}.",
-        "",
-        "Note: Userbase may differ by ±1 because for some CSPs whose execution is in process, their data is currently not added in the sheet, so as per the R15 rule their daily userbase can fluctuate.",
     ]
     report = "\n".join(report_lines)
 
