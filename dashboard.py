@@ -1456,7 +1456,11 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
 
     # S2/S3
     s2_csps = len(current_s2)
-    s2_userbase = _cohort_userbase(current_s2)
+    # Kapil 2026-09-08: S2 = Notice Period (currently serving). Use R15 live
+    # count instead of sheet-based _cohort_userbase. Main sheet + Migration
+    # Data are post-blocking (S3+) sources — counting them for S2 CSPs
+    # produces residual/phantom userbase that swings daily as sheet churns.
+    s2_userbase = sum(r15_of(p) for p in current_s2)
     s3_csps = len(past_s3)
     s3_userbase = _cohort_userbase(past_s3)
 
