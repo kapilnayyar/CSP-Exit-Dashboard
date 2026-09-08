@@ -1456,7 +1456,13 @@ def compute_today_metrics(partners, u1_by, u2_total, u2_picked, r15_by_code,
 
     # S2/S3
     s2_csps = len(current_s2)
-    s2_userbase = _cohort_userbase(current_s2)
+    # Kapil 2026-09-08: S2 = Notice Period. Use ONLY Main sheet U2 pairs for
+    # s2_userbase — skip MD_U1 and shifted (both are post-blocking migration
+    # signals that produce phantom residuals for S2 CSPs, causing daily
+    # delta churn). Main sheet pair = a real customer added to the pickup
+    # queue, so counting it is correct even for S2.
+    _u2_src_s2 = u2_total_raw if u2_total_raw else u2_total
+    s2_userbase = sum((_u2_src_s2.get(p["name"].lower(), 0) or 0) for p in current_s2)
     s3_csps = len(past_s3)
     s3_userbase = _cohort_userbase(past_s3)
 
