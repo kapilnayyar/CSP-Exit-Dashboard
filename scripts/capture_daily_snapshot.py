@@ -489,11 +489,7 @@ GROUP BY 1"""
                 if str(p.get("exit_type") or "").strip() == "B2")
 
     s2_csps = len(current_s2)
-    # Kapil 2026-09-08: S2 = Notice Period (currently serving). Use R15 live
-    # count instead of sheet-based ub_of. Main sheet + Migration Data are
-    # post-blocking (S3+) sources — counting them for S2 CSPs produces
-    # residual/phantom userbase that swings daily as sheet churns.
-    s2_userbase = sum(r15_of(p) for p in current_s2)
+    s2_userbase = sum(ub_of(p) for p in current_s2)
     s3_csps = len(past_s3)
     s3_userbase = sum(ub_of(p) for p in past_s3)
 
