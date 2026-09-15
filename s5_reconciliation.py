@@ -586,6 +586,16 @@ def compute_s5_snapshot(*, sb_url, sb_key, requests_module,
         u1_devs = {mobile_to_device[m] for m in u1_mobiles if m in mobile_to_device}
         u2_pending_devs = {mobile_to_device[m] for m in u2_pending_mobiles if m in mobile_to_device}
         u2_picked_devs = {mobile_to_device[m] for m in u2_picked_mobiles if m in mobile_to_device}
+        # Kapil 2026-09-15: T_DEVICE STATUS lags physical pickup (Fivetran sync
+        # takes hours). For any picked-in-Main-sheet device that T_DEVICE still
+        # shows as IDLE at the CSP, remove it from idle_devs so s5_idle reflects
+        # the pickup immediately without waiting for inventory sync. Main sheet
+        # is the authoritative pickup signal.
+        stale_idle = u2_picked_devs & idle_devs
+        if stale_idle:
+            idle_devs = idle_devs - stale_idle
+            idle_device_ids_by_code[code] = idle_devs
+            idle_count_by_code[code] = len(idle_devs)
         u2_all_devs = u2_pending_devs | u2_picked_devs
         # Kapil's rule: U1 side excludes any device already attributed to U2
         u1_kapil_devs = u1_devs - u2_all_devs
