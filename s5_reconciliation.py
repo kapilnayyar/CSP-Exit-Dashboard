@@ -273,6 +273,19 @@ def load_px_migration(px_book, name_to_owner_code, losers, s5s6_codes):
         if candidate in raw_hdr:
             c_mob = raw_hdr.index(candidate)
             break
+    # Kapil 2026-09-15: header sometimes gets blanked in the sheet (someone
+    # clears cell A1). Fall back to column A (index 0) if its header is empty
+    # AND the first data row's column-A value looks like a mobile number.
+    # Protects against silent misclassification if column A ever holds
+    # non-mobile data — we only fall back on a clean "blank header + numeric
+    # 10-digit value" signal.
+    if c_mob is None and raw_hdr and raw_hdr[0].strip() == "":
+        for r in raw_rows[:20]:
+            if not r: continue
+            v = str(r[0]).strip()
+            if v.isdigit() and 10 <= len(v) <= 12:
+                c_mob = 0
+                break
     if c_mob is None:
         raise RuntimeError(
             f"PX Migration Raw Data missing mobile column "
