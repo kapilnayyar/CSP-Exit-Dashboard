@@ -50,14 +50,12 @@ except ImportError:
 # CSPs whose exit was stopped or excluded from tracking. Keep in sync with the
 # copies in dashboard.py + capture_daily_snapshot.py (or import from a shared
 # module later). Numbers only.
-EXCLUDED_PARTNER_CODES = {
-    # Kapil 2026-09-17: removed yash broadband (281749854790153) and Lovely
-    # communication (281749854637042) — both now auto-detected via
-    # Exit-Stopped state_transitions in load_all_partners.
-    281749854779181,
-    281749854779177,
-    281749854779178,
-}
+# Kapil 2026-09-17: emptied. Previously held 5 codes:
+#   - yash broadband + Lovely communication → now auto-detected via
+#     Exit-Stopped state_transitions in load_all_partners()
+#   - 281749854779181/779177/779178 → verified not present in Supabase
+#     partners table at all (0 matches), so filtering them was a no-op.
+EXCLUDED_PARTNER_CODES = set()
 
 # Kapil 2026-08-17: MANUAL S6 attribution for CSP Exit Tracker display only.
 # These CSPs have completed FnF settlement operationally but their state in
