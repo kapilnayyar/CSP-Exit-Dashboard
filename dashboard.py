@@ -2504,14 +2504,20 @@ def render():
 
     # Kapil 2026-09-17: Exit OS "Stop Exit" — drop CSPs whose latest
     # state_transitions row is EXIT_STOPPED. Automatic — no manual list.
-    from s5_reconciliation import fetch_exit_stopped_partner_ids as _fetch_stopped
-    _stopped_ids = _fetch_stopped(
-        secrets["supabase_url"], secrets["supabase_key"], requests,
-    )
-    if _stopped_ids:
-        _before = len(partners)
-        partners = [p for p in partners if p.get("id") not in _stopped_ids]
-        print(f"[EXIT_STOPPED filter, dashboard] dropped {_before - len(partners)} stopped CSPs")
+    # Fail-safe: if s5_reconciliation is a stale-cached older version without
+    # the helper, skip the filter rather than crash the whole dashboard.
+    try:
+        from s5_reconciliation import fetch_exit_stopped_partner_ids as _fetch_stopped
+        _stopped_ids = _fetch_stopped(
+            secrets["supabase_url"], secrets["supabase_key"], requests,
+        )
+        if _stopped_ids:
+            _before = len(partners)
+            partners = [p for p in partners if p.get("id") not in _stopped_ids]
+            print(f"[EXIT_STOPPED filter, dashboard] dropped {_before - len(partners)} stopped CSPs")
+    except (ImportError, AttributeError) as _e:
+        print(f"[EXIT_STOPPED filter] skipped — {_e}. "
+              "Restart the app to load the latest s5_reconciliation.")
 
     u2 = classify_u2(u2_rows)
     u1 = classify_u1(u1_rows)
