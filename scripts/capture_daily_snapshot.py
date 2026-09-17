@@ -310,6 +310,15 @@ def main():
     if _s6_moved_local:
         print(f"[MANUAL_S6_OVERRIDE, local partners] moved {len(_s6_moved_local)} S5→S6: {_s6_moved_local}")
 
+    # Kapil 2026-09-17: Exit OS "Stop Exit" — drop CSPs whose latest
+    # state_transitions row is EXIT_STOPPED. Automatic, mirrors dashboard.py.
+    from s5_reconciliation import fetch_exit_stopped_partner_ids
+    _stopped_ids = fetch_exit_stopped_partner_ids(supabase_url, supabase_key, requests)
+    if _stopped_ids:
+        _before = len(partners)
+        partners = [p for p in partners if p.get("id") not in _stopped_ids]
+        print(f"[EXIT_STOPPED filter, cron] dropped {_before - len(partners)} stopped CSPs")
+
     # ── 4. Google Sheet: U1 (Migration Data) + U2 (Main sheet) ─────────────
     # _read_records_safe tolerates trailing empty columns (otherwise gspread's
     # get_all_records() raises "duplicate header: ['']" when col_count > filled headers).

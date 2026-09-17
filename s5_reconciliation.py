@@ -118,10 +118,58 @@ def _read_sheet_values_safe(ws):
 # Data loaders — each accepts fully-formed inputs, no globals
 # ────────────────────────────────────────────────────────────────────────────
 
+def fetch_exit_stopped_partner_ids(sb_url, sb_key, requests_module):
+    """Return the set of Exit-OS `partners.id` UUIDs that are currently
+    Exit-Stopped. Data source: `state_transitions` table.
+
+    Kapil 2026-09-17: the Exit OS "Stop Exit" feature writes a row to
+    state_transitions with `reason ILIKE 'EXIT_STOPPED:%'` when a CSP's
+    exit is stopped. A future "Resume Exit" writes another row (assumed
+    prefix `EXIT_RESUMED:` — safe to extend later without churn).
+
+    Logic (robust to future Resumes):
+      1. Fetch every state_transitions row (there are only a handful).
+      2. Group by partner_id; take the LATEST row per partner (max created_at).
+      3. A partner is currently stopped iff its LATEST reason starts with
+         "EXIT_STOPPED:" (case-insensitive).
+
+    Returns {partner_id_uuid_str}. Empty on any error so we NEVER
+    over-filter partners silently.
+    """
+    try:
+        hdr = {"apikey": sb_key,
+               "Authorization": f"Bearer {sb_key}",
+               "Accept": "application/json"}
+        r = requests_module.get(
+            f"{sb_url}/rest/v1/state_transitions",
+            params={"select": "partner_id,reason,created_at"},
+            headers=hdr, timeout=15,
+        )
+        r.raise_for_status()
+        rows = r.json()
+        if not isinstance(rows, list):
+            return set()
+        latest = {}   # partner_id -> (created_at, reason)
+        for row in rows:
+            pid = row.get("partner_id")
+            ts = str(row.get("created_at") or "")
+            reason = str(row.get("reason") or "")
+            if not pid:
+                continue
+            prev = latest.get(pid)
+            if prev is None or ts > prev[0]:
+                latest[pid] = (ts, reason)
+        return {pid for pid, (_ts, reason) in latest.items()
+                if reason.upper().startswith("EXIT_STOPPED:")}
+    except Exception:
+        return set()
+
+
 def load_all_partners(sb_url, sb_key, requests_module):
-    """Return ALL partners (all states), EXCLUDED filtered out. Needed for the
-    collision resolver so an S4 partner that shares a name with an S5 partner
-    can be picked as the collision owner (forcing the S5 dupe to lose)."""
+    """Return ALL partners (all states), EXCLUDED and Exit-Stopped filtered
+    out. Needed for the collision resolver so an S4 partner that shares a
+    name with an S5 partner can be picked as the collision owner (forcing
+    the S5 dupe to lose)."""
     hdr = {"apikey": sb_key,
            "Authorization": f"Bearer {sb_key}",
            "Accept": "application/json"}
@@ -132,6 +180,10 @@ def load_all_partners(sb_url, sb_key, requests_module):
     ).json()
     partners = [p for p in partners
                 if int(p.get("partner_code") or 0) not in EXCLUDED_PARTNER_CODES]
+    # Kapil 2026-09-17: drop CSPs whose exit is currently stopped in Exit OS.
+    stopped_ids = fetch_exit_stopped_partner_ids(sb_url, sb_key, requests_module)
+    if stopped_ids:
+        partners = [p for p in partners if p.get("id") not in stopped_ids]
     # Attach u1_count / u2_count for collision resolver
     ext = requests_module.get(
         f"{sb_url}/rest/v1/partner_details_extended",

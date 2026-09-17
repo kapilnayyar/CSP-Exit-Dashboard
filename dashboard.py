@@ -2505,6 +2505,17 @@ def render():
     if _moved:
         print(f"[MANUAL_S6_OVERRIDE, dashboard] moved {len(_moved)} S5→S6: {_moved}")
 
+    # Kapil 2026-09-17: Exit OS "Stop Exit" — drop CSPs whose latest
+    # state_transitions row is EXIT_STOPPED. Automatic — no manual list.
+    from s5_reconciliation import fetch_exit_stopped_partner_ids as _fetch_stopped
+    _stopped_ids = _fetch_stopped(
+        secrets["supabase_url"], secrets["supabase_key"], requests,
+    )
+    if _stopped_ids:
+        _before = len(partners)
+        partners = [p for p in partners if p.get("id") not in _stopped_ids]
+        print(f"[EXIT_STOPPED filter, dashboard] dropped {_before - len(partners)} stopped CSPs")
+
     u2 = classify_u2(u2_rows)
     u1 = classify_u1(u1_rows)
     u1_by, u2_total, u2_picked = build_sheet_lookups(u1_rows, u2_rows)
