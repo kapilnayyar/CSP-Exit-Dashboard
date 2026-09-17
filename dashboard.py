@@ -31,13 +31,10 @@ ALLOWED_DOMAINS = ("@wiom.in",)
 
 # Partner codes excluded from the dashboard (per-CSP exceptions).
 # These are dropped at the data-fetch boundary so they don't appear in any tab.
-EXCLUDED_PARTNER_CODES = {
-    281749854653857,
-    281749854733209,
-    274877909399,
-    281749854790153,  # exit stopped
-    281749854637042,  # exit stopped
-}
+# Kapil 2026-09-17: emptied — the 5 codes previously listed were all
+# Exit-Stopped CSPs, now auto-detected via Supabase state_transitions
+# (see the EXIT_STOPPED filter block after MANUAL_S6_OVERRIDE).
+EXCLUDED_PARTNER_CODES = set()
 
 # Sheet partner name -> canonical Supabase partner name (lowercased keys).
 # Use this when a CSP appears in the Main sheet under a different name than in Supabase.

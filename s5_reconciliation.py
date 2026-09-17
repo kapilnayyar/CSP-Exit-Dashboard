@@ -51,8 +51,9 @@ except ImportError:
 # copies in dashboard.py + capture_daily_snapshot.py (or import from a shared
 # module later). Numbers only.
 EXCLUDED_PARTNER_CODES = {
-    281749854790153,  # yash broadband
-    281749854637042,  # Lovely communication
+    # Kapil 2026-09-17: removed yash broadband (281749854790153) and Lovely
+    # communication (281749854637042) — both now auto-detected via
+    # Exit-Stopped state_transitions in load_all_partners.
     281749854779181,
     281749854779177,
     281749854779178,

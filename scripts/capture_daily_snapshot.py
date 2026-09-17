@@ -59,13 +59,10 @@ TOTALS_HEADERS = [
 ]
 
 # Same as dashboard.py — keep in sync
-EXCLUDED_PARTNER_CODES = {
-    281749854653857,
-    281749854733209,
-    274877909399,
-    281749854790153,  # exit stopped
-    281749854637042,  # exit stopped
-}
+# Kapil 2026-09-17: emptied — the 5 codes previously listed were all
+# Exit-Stopped CSPs, now auto-detected via Supabase state_transitions
+# (see the EXIT_STOPPED filter block after MANUAL_S6_OVERRIDE).
+EXCLUDED_PARTNER_CODES = set()
 
 SHEET_NAME_ALIAS = {
     "network solutions": "Manisha Traders 1",
