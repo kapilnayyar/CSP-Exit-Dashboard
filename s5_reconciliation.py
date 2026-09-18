@@ -199,8 +199,12 @@ def load_all_partners(sb_url, sb_key, requests_module):
 
 def load_idle_from_metabase(mb_query_fn, partner_codes, n_passes=5, gap_seconds=60):
     """Return (idle_count_by_code, idle_device_ids_by_code).
-    Single-shot query. Device IDs are stable identifiers so no multi-pass
-    stabilization needed (NAS IDs required unions because they flickered).
+
+    Kapil 2026-09-18: Metabase server enforces a 2000-row cap on `/api/dataset`
+    responses regardless of the `constraints` bypass, so a single-shot query
+    was silently returning only 2000 IDLE rows (real total is ~50K). We now
+    paginate with ORDER BY DEVICE_ID + LIMIT/OFFSET, page size 1900 (safely
+    under the cap). DEVICE_ID is a stable identifier so pagination is safe.
 
     idle_count_by_code: {code_str: n_idle_devices}
     idle_device_ids_by_code: {code_str: set(device_id_str)}
@@ -215,18 +219,32 @@ def load_idle_from_metabase(mb_query_fn, partner_codes, n_passes=5, gap_seconds=
         return idle_count_by_code, idle_device_ids_by_code
     in_list = ",".join(str(c) for c in partner_codes if c)
 
-    rows = mb_query_fn(f"""
+    PAGE = 1900
+    offset = 0
+    total_rows = 0
+    while True:
+        rows = mb_query_fn(f"""
 SELECT "LCO_ACCOUNT_ID", "DEVICE_ID"
 FROM "PROD_DB"."POSTGRES_RDS_INVENTORY_INVENTORY"."T_DEVICE"
 WHERE "STATUS" = 'IDLE' AND "LCO_ACCOUNT_ID" IN ({in_list})
-  AND "DEVICE_ID" IS NOT NULL""")
-    for lco, dev in rows:
-        if lco and dev:
-            idle_device_ids_by_code[str(lco)].add(str(dev).strip())
+  AND "DEVICE_ID" IS NOT NULL
+ORDER BY "DEVICE_ID"
+LIMIT {PAGE} OFFSET {offset}""")
+        if not rows:
+            break
+        for lco, dev in rows:
+            if lco and dev:
+                idle_device_ids_by_code[str(lco)].add(str(dev).strip())
+        total_rows += len(rows)
+        if len(rows) < PAGE:
+            break
+        offset += PAGE
+
     for code, ids in idle_device_ids_by_code.items():
         idle_count_by_code[code] = len(ids)
     total = sum(idle_count_by_code.values())
-    print(f"[idle-device-ids] total={total} across {len(idle_count_by_code)} CSPs")
+    print(f"[idle-device-ids] total={total} across {len(idle_count_by_code)} CSPs "
+          f"(paginated {total_rows} rows)")
 
     return idle_count_by_code, dict(idle_device_ids_by_code)
 
@@ -442,10 +460,15 @@ def load_mobile_to_device_id(mb_query_fn, mobiles):
     variants_left = set(all_variants)
     variant_to_device = {}
 
+    # Kapil 2026-09-18: Metabase caps results at 2000 rows server-side
+    # regardless of the `constraints` bypass. Since ACTIVE_CUST returns at
+    # most 1 row per MOBILE, chunk size 1900 guarantees result < cap.
+    CHUNK = 1900
+
     # Primary: ACTIVE_CUST
     v_list = list(variants_left)
-    for i in range(0, len(v_list), 5000):
-        chunk = v_list[i:i + 5000]
+    for i in range(0, len(v_list), CHUNK):
+        chunk = v_list[i:i + CHUNK]
         rows = mb_query_fn(f"""
 SELECT MOBILE, DEVICE_ID
 FROM PUBLIC.ACTIVE_CUST
@@ -459,8 +482,8 @@ WHERE MOBILE IN ({_sql_in(chunk)})""")
     # Fallback: CUSTOMER_V_2 for the ones still missing
     if variants_left:
         v_list = list(variants_left)
-        for i in range(0, len(v_list), 5000):
-            chunk = v_list[i:i + 5000]
+        for i in range(0, len(v_list), CHUNK):
+            chunk = v_list[i:i + CHUNK]
             rows = mb_query_fn(f"""
 SELECT MOBILE, DEVICE_ID
 FROM DYNAMODB_READ.CUSTOMER_V_2
