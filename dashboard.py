@@ -1768,7 +1768,8 @@ def stage_card_with_delta(stage_label, color, rows):
     return html
 
 
-def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str=""):
+def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str="",
+                                   stopped_pick_count=0, stopped_pick_by_csp=None):
     """Tab 5 — same 7 stages as Tab 2, with D0 / D-1 / Delta columns.
     m = today_metrics dict; y = yesterday_totals dict (empty if missing).
     report_date_str = the business-day date this report represents
@@ -1946,6 +1947,18 @@ def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str=""):
             ("Total Netboxes Recovered from CSPs (out of liability)", m['s6_collected'], fmt_pct(m['s6_collected'], s6_total_dev) if s6_total_dev else "0.0%", yd("s6_collected")),
         ]
     ), unsafe_allow_html=True)
+
+    # ── Note: devices picked from customers of Exit-Stopped CSPs ─────────────
+    # These picks are physically at Wiom (real recoveries) but their CSPs are
+    # no longer in the exit funnel, so they don't count in s4a_u2_pick.
+    if stopped_pick_count and stopped_pick_by_csp:
+        _list_str = "; ".join(f"{k}: {v}" for k, v in sorted(stopped_pick_by_csp.items()))
+        st.info(
+            f"**Note:** {stopped_pick_count} device(s) had already been picked from "
+            f"customers of CSPs whose exit has now been stopped ({_list_str}). "
+            f"These are recorded in the Main sheet but no longer part of the "
+            f"active exit funnel."
+        )
 
     # ── Daily report (copy-paste from below) ─────────────────────────────────
     def _delta_inline(key):
@@ -2506,18 +2519,40 @@ def render():
     # state_transitions row is EXIT_STOPPED. Automatic — no manual list.
     # Fail-safe: if s5_reconciliation is a stale-cached older version without
     # the helper, skip the filter rather than crash the whole dashboard.
+    stopped_names_lc = set()
     try:
         from s5_reconciliation import fetch_exit_stopped_partner_ids as _fetch_stopped
         _stopped_ids = _fetch_stopped(
             secrets["supabase_url"], secrets["supabase_key"], requests,
         )
         if _stopped_ids:
+            # Remember stopped CSP names BEFORE filtering — needed for the
+            # picked-at-stopped-CSP note on Tab 5.
+            stopped_names_lc = {p["name"].lower() for p in partners
+                                if p.get("id") in _stopped_ids}
             _before = len(partners)
             partners = [p for p in partners if p.get("id") not in _stopped_ids]
             print(f"[EXIT_STOPPED filter, dashboard] dropped {_before - len(partners)} stopped CSPs")
     except (ImportError, AttributeError) as _e:
         print(f"[EXIT_STOPPED filter] skipped — {_e}. "
               "Restart the app to load the latest s5_reconciliation.")
+
+    # Kapil 2026-09-18: count devices that had been picked from customers of
+    # CSPs whose exit has now been stopped. Shown on Tab 5 as a note. Real
+    # picks (Wiom's team recovered them), but their CSPs are out of the
+    # active funnel so they don't count in s4a_u2_pick.
+    stopped_pick_count = 0
+    stopped_pick_by_csp = {}
+    if stopped_names_lc:
+        for _row in u2_rows:
+            _partner = str(_row.get("Partner", "")).strip().lower()
+            if _partner not in stopped_names_lc:
+                continue
+            _rem = str(_row.get("Remarks Dropdown", "")).strip().lower()
+            _pp = str(_row.get("Device Picked (Ajinkya/Pradeep)", "")).strip().lower()
+            if _rem == "device picked up" or _pp == "yes":
+                stopped_pick_count += 1
+                stopped_pick_by_csp[_partner] = stopped_pick_by_csp.get(_partner, 0) + 1
 
     u2 = classify_u2(u2_rows)
     u1 = classify_u1(u1_rows)
@@ -2839,7 +2874,9 @@ def render():
         render_tab4_search(partners, u2_rows, secrets)
     with tab5:
         render_tab5_funnel_with_delta(today_metrics, yest_totals,
-                                       report_date_str=report_date_str)
+                                       report_date_str=report_date_str,
+                                       stopped_pick_count=stopped_pick_count,
+                                       stopped_pick_by_csp=stopped_pick_by_csp)
     with tab6:
         portal_pickups = fetch_portal_pickups(
             secrets.get("portal_url", ""),
