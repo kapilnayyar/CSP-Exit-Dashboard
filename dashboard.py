@@ -1955,9 +1955,7 @@ def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str="",
         _list_str = "; ".join(f"{k}: {v}" for k, v in sorted(stopped_pick_by_csp.items()))
         st.info(
             f"**Note:** {stopped_pick_count} device(s) had already been picked from "
-            f"customers of CSPs whose exit has now been stopped ({_list_str}). "
-            f"These are recorded in the Main sheet but no longer part of the "
-            f"active exit funnel."
+            f"customers of CSPs whose exit has now been stopped ({_list_str})."
         )
 
     # ── Daily report (copy-paste from below) ─────────────────────────────────
@@ -2002,9 +2000,7 @@ def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str="",
         _list_str = "; ".join(f"{k}: {v}" for k, v in sorted(stopped_pick_by_csp.items()))
         report_lines.append(
             f"• Note: {stopped_pick_count} device(s) had already been picked from "
-            f"customers of CSPs whose exit has now been stopped ({_list_str}). "
-            f"These are recorded in the Main sheet but no longer part of the "
-            f"active exit funnel."
+            f"customers of CSPs whose exit has now been stopped ({_list_str})."
         )
     report = "\n".join(report_lines)
 
