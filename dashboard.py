@@ -1996,6 +1996,16 @@ def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str="",
         f"• S4 in process: Migration Done for {m['s4b_u1_mig']:,} U1 customers{_delta_inline('s4b_u1_mig')} and Netbox Pickup Done for {m['s4b_u2_pick']:,} U2 customers{_delta_inline('s4b_u2_pick')} across {m['s4b_csps']:,} CSPs.",
         f"• {m['s6_csps']:,} {csp_word} has successfully reached S6 with {s6_liability_text}.",
     ]
+    # Kapil 2026-09-18: note about devices picked from customers of Exit-
+    # Stopped CSPs — real recoveries, but their CSPs are out of the funnel.
+    if stopped_pick_count and stopped_pick_by_csp:
+        _list_str = "; ".join(f"{k}: {v}" for k, v in sorted(stopped_pick_by_csp.items()))
+        report_lines.append(
+            f"• Note: {stopped_pick_count} device(s) had already been picked from "
+            f"customers of CSPs whose exit has now been stopped ({_list_str}). "
+            f"These are recorded in the Main sheet but no longer part of the "
+            f"active exit funnel."
+        )
     report = "\n".join(report_lines)
 
     st.markdown("### 📋 Daily Report (copy from below)")
