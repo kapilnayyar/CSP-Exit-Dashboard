@@ -1888,8 +1888,8 @@ def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str=""):
         "STAGE 4a  —  EXECUTION COMPLETED (currently in S5 or S6)", STAGE_COLORS["S4c"],
         [
             ("CSPs", m['s4a_csps'], fmt_pct(m['s4a_csps'], m['s1_csps']), yd("s4a_csps")),
-            ("U1 Migration Completed", m['s4a_u1_mig'], u1_conv, yd("s4a_u1_mig")),
-            ("U2 Netbox Picked by Wiom", m['s4a_u2_pick'], u2_conv, yd("s4a_u2_pick")),
+            (f"U1 Migration Completed (of {m['s4a_u1_total']:,} total)", m['s4a_u1_mig'], u1_conv, yd("s4a_u1_mig")),
+            (f"U2 Netbox Picked by Wiom (of {m['s4a_u2_total']:,} total)", m['s4a_u2_pick'], u2_conv, yd("s4a_u2_pick")),
         ]
     ), unsafe_allow_html=True)
 
@@ -1900,9 +1900,9 @@ def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str=""):
         [
             ("CSPs", m['s4b_csps'], fmt_pct(m['s4b_csps'], m['s1_csps']), yd("s4b_csps")),
             ("U1 Userbase", m['s4b_u1'], fmt_pct(m['s4b_u1'], s4b_total), yd("s4b_u1")),
-            ("Migration Done", m['s4b_u1_mig'], fmt_pct(m['s4b_u1_mig'], m['s4b_u1']), yd("s4b_u1_mig")),
+            (f"Migration Done (of {m['s4b_u1']:,} U1)", m['s4b_u1_mig'], fmt_pct(m['s4b_u1_mig'], m['s4b_u1']), yd("s4b_u1_mig")),
             ("U2 Userbase", m['s4b_u2'], fmt_pct(m['s4b_u2'], s4b_total), yd("s4b_u2")),
-            ("Netbox Pickup Done", m['s4b_u2_pick'], fmt_pct(m['s4b_u2_pick'], m['s4b_u2']), yd("s4b_u2_pick")),
+            (f"Netbox Pickup Done (of {m['s4b_u2']:,} U2)", m['s4b_u2_pick'], fmt_pct(m['s4b_u2_pick'], m['s4b_u2']), yd("s4b_u2_pick")),
             ("Userbase Pending to Add", m['s4b_pending'], fmt_pct(m['s4b_pending'], s4b_total), yd("s4b_pending")),
         ]
     ), unsafe_allow_html=True)
@@ -2209,8 +2209,8 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
 
     st.markdown(stage_card("STAGE 4a  —  EXECUTION COMPLETED (currently in S5 or S6)", STAGE_COLORS["S4c"], [
         ("CSPs", s4a_csps_completed, fmt_pct(s4a_csps_completed, s1_csps)),
-        ("U1 Migration Completed", s4a_u1_mig, fmt_pct(s4a_u1_mig, s4a_u1_total)),
-        ("U2 Netbox Picked by Wiom", s4a_u2_pick, fmt_pct(s4a_u2_pick, s4a_u2_total)),
+        (f"U1 Migration Completed (of {s4a_u1_total:,} total)", s4a_u1_mig, fmt_pct(s4a_u1_mig, s4a_u1_total)),
+        (f"U2 Netbox Picked by Wiom (of {s4a_u2_total:,} total)", s4a_u2_pick, fmt_pct(s4a_u2_pick, s4a_u2_total)),
     ]), unsafe_allow_html=True)
 
     # ── S4b — Execution In Process (currently in S4) ─────────────────────────
@@ -2233,9 +2233,9 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     st.markdown(stage_card("STAGE 4b  —  EXECUTION IN PROCESS (currently in S4)", STAGE_COLORS["S4a"], [
         ("CSPs", s4b_csps, fmt_pct(s4b_csps, s1_csps)),
         ("U1 Userbase", s4b_u1, fmt_pct(s4b_u1, s4b_total_userbase)),
-        ("Migration Done", s4b_u1_mig, fmt_pct(s4b_u1_mig, s4b_u1)),
+        (f"Migration Done (of {s4b_u1:,} U1)", s4b_u1_mig, fmt_pct(s4b_u1_mig, s4b_u1)),
         ("U2 Userbase", s4b_u2, fmt_pct(s4b_u2, s4b_total_userbase)),
-        ("Netbox Pickup Done", s4b_u2_pick, fmt_pct(s4b_u2_pick, s4b_u2)),
+        (f"Netbox Pickup Done (of {s4b_u2:,} U2)", s4b_u2_pick, fmt_pct(s4b_u2_pick, s4b_u2)),
         ("Userbase Pending to Add", s4b_pending, fmt_pct(s4b_pending, s4b_total_userbase)),
     ]), unsafe_allow_html=True)
 
