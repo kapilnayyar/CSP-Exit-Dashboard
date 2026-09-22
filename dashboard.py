@@ -1889,8 +1889,10 @@ def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str="",
         "STAGE 4a  —  EXECUTION COMPLETED (currently in S5 or S6)", STAGE_COLORS["S4c"],
         [
             ("CSPs", m['s4a_csps'], fmt_pct(m['s4a_csps'], m['s1_csps']), yd("s4a_csps")),
-            (f"U1 Migration Completed (of {m['s4a_u1_total']:,} total)", m['s4a_u1_mig'], u1_conv, yd("s4a_u1_mig")),
-            (f"U2 Netbox Picked by Wiom (of {m['s4a_u2_total']:,} total)", m['s4a_u2_pick'], u2_conv, yd("s4a_u2_pick")),
+            ("Total U1 Customers", m['s4a_u1_total'], "", yd("s4a_u1_total")),
+            ("U1 Migration Completed", m['s4a_u1_mig'], u1_conv, yd("s4a_u1_mig")),
+            ("Total U2 Customers", m['s4a_u2_total'], "", yd("s4a_u2_total")),
+            ("U2 Netbox Picked by Wiom", m['s4a_u2_pick'], u2_conv, yd("s4a_u2_pick")),
         ]
     ), unsafe_allow_html=True)
 
@@ -2218,8 +2220,10 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
 
     st.markdown(stage_card("STAGE 4a  —  EXECUTION COMPLETED (currently in S5 or S6)", STAGE_COLORS["S4c"], [
         ("CSPs", s4a_csps_completed, fmt_pct(s4a_csps_completed, s1_csps)),
-        (f"U1 Migration Completed (of {s4a_u1_total:,} total)", s4a_u1_mig, fmt_pct(s4a_u1_mig, s4a_u1_total)),
-        (f"U2 Netbox Picked by Wiom (of {s4a_u2_total:,} total)", s4a_u2_pick, fmt_pct(s4a_u2_pick, s4a_u2_total)),
+        ("Total U1 Customers", s4a_u1_total, ""),
+        ("U1 Migration Completed", s4a_u1_mig, fmt_pct(s4a_u1_mig, s4a_u1_total)),
+        ("Total U2 Customers", s4a_u2_total, ""),
+        ("U2 Netbox Picked by Wiom", s4a_u2_pick, fmt_pct(s4a_u2_pick, s4a_u2_total)),
     ]), unsafe_allow_html=True)
 
     # ── S4b — Execution In Process (currently in S4) ─────────────────────────
