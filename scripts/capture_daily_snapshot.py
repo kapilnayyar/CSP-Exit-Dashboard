@@ -339,27 +339,58 @@ def main():
             "migrated": ex["migrated"] + _to_int(row.get("Migrated")),
         }
 
+    # Kapil 2026-09-22: dedupe u2_total on unique (mobile, partner_key) pairs
+    # so cron matches the dashboard's compute_unique_universe. Previously the
+    # cron incremented per-row, double-counting Main-sheet duplicate rows and
+    # counting the same customer twice under number-format variants
+    # (+91XXXX vs XXXX). Result: cron over-counted s4a_u2_total by ~180 vs
+    # the dashboard live compute, causing a phantom D-1 vs D0 delta.
+    def _norm_mob(v):
+        if v is None: return ""
+        s = str(v).strip().replace(" ", "").replace("-", "")
+        if s.endswith(".0"): s = s[:-2]
+        if s.startswith("+91"): s = s[3:]
+        elif s.startswith("91") and len(s) == 12: s = s[2:]
+        elif s.startswith("0"): s = s.lstrip("0")
+        return s
+
+    u2_pairs_seen = set()          # (mobile_norm, partner_key)
+    u2_picked_pairs_seen = set()
     u2_total = defaultdict(int)
     u2_picked = defaultdict(int)
     u2_pending_by_name = defaultdict(list)
     for row in u2_rows:
         name = str(row.get("Partner") or "").strip()
-        mobile = row.get("Mobile no") or row.get("Mobile")
+        mobile = _norm_mob(row.get("Mobile no") or row.get("Mobile"))
         if not name or not mobile:
             continue
         key = name.lower()
         key = SHEET_NAME_ALIAS.get(key, name).lower() if key in SHEET_NAME_ALIAS else key
-        u2_total[key] += 1
+        pair = (mobile, key)
         # PICKED RULE: customer counts as picked if EITHER column says so —
         # Remarks Dropdown == 'Device picked up'  OR
         # Device Picked (Ajinkya/Pradeep) == 'Yes' (both case-insensitive).
         # Mirrors dashboard.py's _u2_row_is_picked helper. Keep in sync.
         remark = str(row.get("Remarks Dropdown") or "").strip().lower()
         pradeep = str(row.get("Device Picked (Ajinkya/Pradeep)") or "").strip().lower()
-        if remark == "device picked up" or pradeep == "yes":
-            u2_picked[key] += 1
+        is_picked = (remark == "device picked up" or pradeep == "yes")
+        if pair not in u2_pairs_seen:
+            u2_pairs_seen.add(pair)
+            u2_total[key] += 1
+            if is_picked:
+                u2_picked_pairs_seen.add(pair)
+                u2_picked[key] += 1
+            else:
+                u2_pending_by_name[key].append(mobile)
         else:
-            u2_pending_by_name[key].append(str(mobile).strip())
+            # duplicate row for same (mobile, partner) — if this dup marks
+            # the customer as picked while the first row didn't, promote.
+            if is_picked and pair not in u2_picked_pairs_seen:
+                u2_picked_pairs_seen.add(pair)
+                u2_picked[key] += 1
+                # Drop from pending if it was there
+                try: u2_pending_by_name[key].remove(mobile)
+                except ValueError: pass
 
     # ── 5. Metabase helper ─────────────────────────────────────────────────
     mb_hdr = {"x-api-key": mb_key, "Content-Type": "application/json"}

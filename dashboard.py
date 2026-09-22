@@ -1885,20 +1885,19 @@ def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str="",
     # ── S4a ──────────────────────────────────────────────────────────────────
     u1_conv = fmt_pct(m['s4a_u1_mig'], m['s4a_u1_total'])
     u2_conv = fmt_pct(m['s4a_u2_pick'], m['s4a_u2_total'])
-    s4a_universe = m['s4a_u1_total'] + m['s4a_u2_total']
-    # "Total U1/U2 Customers" are stock reference numbers (universe size),
-    # not flow metrics. Force D-1 = D0 so no phantom delta shows — cron and
-    # live compute paths dedupe differently so a raw D-1 vs live D0 comparison
-    # creates false negatives. Percentage shows each cohort's share of the
-    # S4a userbase (U1 + U2) so they sum to 100%.
+    s4a_ub = m.get('s4a_userbase', 0) or (m['s4a_u1_total'] + m['s4a_u2_total'])
+    # Kapil 2026-09-22 Option A: One authoritative Total Customers row
+    # (= s4a_userbase; dedupes shifted customers between U1 and U2). U1/U2
+    # progress rows keep their raw denominators inline because those are the
+    # pools each progress metric is measured against — not because they add
+    # up (they don't; ~2,868 customers appear in both).
     st.markdown(stage_card_with_delta(
         "STAGE 4a  —  EXECUTION COMPLETED (currently in S5 or S6)", STAGE_COLORS["S4c"],
         [
             ("CSPs", m['s4a_csps'], fmt_pct(m['s4a_csps'], m['s1_csps']), yd("s4a_csps")),
-            ("Total U1 Customers", m['s4a_u1_total'], fmt_pct(m['s4a_u1_total'], s4a_universe), m['s4a_u1_total']),
-            ("U1 Migration Completed", m['s4a_u1_mig'], u1_conv, yd("s4a_u1_mig")),
-            ("Total U2 Customers", m['s4a_u2_total'], fmt_pct(m['s4a_u2_total'], s4a_universe), m['s4a_u2_total']),
-            ("U2 Netbox Picked by Wiom", m['s4a_u2_pick'], u2_conv, yd("s4a_u2_pick")),
+            ("Total Customers", s4a_ub, fmt_pct(s4a_ub, m['s1_userbase']), yd("s4a_userbase")),
+            (f"U1 Migration Completed (of {m['s4a_u1_total']:,} U1)", m['s4a_u1_mig'], u1_conv, yd("s4a_u1_mig")),
+            (f"U2 Netbox Picked by Wiom (of {m['s4a_u2_total']:,} U2)", m['s4a_u2_pick'], u2_conv, yd("s4a_u2_pick")),
         ]
     ), unsafe_allow_html=True)
 
@@ -2224,13 +2223,14 @@ def render_tab2_funnel(partners, u1_by, u2_total, u2_picked, r15_by_code, idle_t
     s4a_u2_pick = sum(_u2_picked_for(p, u2_picked) for p in completed_partners)
     s4a_csps_completed = len(completed_partners)
 
-    s4a_universe_t2 = s4a_u1_total + s4a_u2_total
+    s4a_ub_t2 = today_metrics.get('s4a_userbase', 0) if today_metrics else 0
+    if not s4a_ub_t2:
+        s4a_ub_t2 = s4a_u1_total + s4a_u2_total
     st.markdown(stage_card("STAGE 4a  —  EXECUTION COMPLETED (currently in S5 or S6)", STAGE_COLORS["S4c"], [
         ("CSPs", s4a_csps_completed, fmt_pct(s4a_csps_completed, s1_csps)),
-        ("Total U1 Customers", s4a_u1_total, fmt_pct(s4a_u1_total, s4a_universe_t2)),
-        ("U1 Migration Completed", s4a_u1_mig, fmt_pct(s4a_u1_mig, s4a_u1_total)),
-        ("Total U2 Customers", s4a_u2_total, fmt_pct(s4a_u2_total, s4a_universe_t2)),
-        ("U2 Netbox Picked by Wiom", s4a_u2_pick, fmt_pct(s4a_u2_pick, s4a_u2_total)),
+        ("Total Customers", s4a_ub_t2, fmt_pct(s4a_ub_t2, s1_userbase)),
+        (f"U1 Migration Completed (of {s4a_u1_total:,} U1)", s4a_u1_mig, fmt_pct(s4a_u1_mig, s4a_u1_total)),
+        (f"U2 Netbox Picked by Wiom (of {s4a_u2_total:,} U2)", s4a_u2_pick, fmt_pct(s4a_u2_pick, s4a_u2_total)),
     ]), unsafe_allow_html=True)
 
     # ── S4b — Execution In Process (currently in S4) ─────────────────────────
