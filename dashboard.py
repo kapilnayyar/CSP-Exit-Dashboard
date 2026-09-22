@@ -1885,13 +1885,17 @@ def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str="",
     # ── S4a ──────────────────────────────────────────────────────────────────
     u1_conv = fmt_pct(m['s4a_u1_mig'], m['s4a_u1_total'])
     u2_conv = fmt_pct(m['s4a_u2_pick'], m['s4a_u2_total'])
+    # "Total U1/U2 Customers" are stock reference numbers (universe size),
+    # not flow metrics. Force D-1 = D0 so no phantom delta shows — cron and
+    # live compute paths dedupe differently so a raw D-1 vs live D0 comparison
+    # creates false negatives.
     st.markdown(stage_card_with_delta(
         "STAGE 4a  —  EXECUTION COMPLETED (currently in S5 or S6)", STAGE_COLORS["S4c"],
         [
             ("CSPs", m['s4a_csps'], fmt_pct(m['s4a_csps'], m['s1_csps']), yd("s4a_csps")),
-            ("Total U1 Customers", m['s4a_u1_total'], "", yd("s4a_u1_total")),
+            ("Total U1 Customers", m['s4a_u1_total'], "", m['s4a_u1_total']),
             ("U1 Migration Completed", m['s4a_u1_mig'], u1_conv, yd("s4a_u1_mig")),
-            ("Total U2 Customers", m['s4a_u2_total'], "", yd("s4a_u2_total")),
+            ("Total U2 Customers", m['s4a_u2_total'], "", m['s4a_u2_total']),
             ("U2 Netbox Picked by Wiom", m['s4a_u2_pick'], u2_conv, yd("s4a_u2_pick")),
         ]
     ), unsafe_allow_html=True)
