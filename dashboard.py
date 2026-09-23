@@ -1895,7 +1895,7 @@ def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str="",
         "STAGE 4a  —  EXECUTION COMPLETED (currently in S5 or S6)", STAGE_COLORS["S4c"],
         [
             ("CSPs", m['s4a_csps'], fmt_pct(m['s4a_csps'], m['s1_csps']), yd("s4a_csps")),
-            ("Total Customers", s4a_ub, fmt_pct(s4a_ub, m['s1_userbase']), yd("s4a_userbase")),
+            ("Total Customers", s4a_ub, fmt_pct(s4a_ub, m['s1_userbase']), yd("s4a_userbase") or s4a_ub),
             (f"U1 Migration Completed (of {m['s4a_u1_total']:,} U1)", m['s4a_u1_mig'], u1_conv, yd("s4a_u1_mig")),
             (f"U2 Netbox Picked by Wiom (of {m['s4a_u2_total']:,} U2)", m['s4a_u2_pick'], u2_conv, yd("s4a_u2_pick")),
         ]

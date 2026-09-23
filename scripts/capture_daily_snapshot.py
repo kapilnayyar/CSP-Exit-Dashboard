@@ -56,6 +56,9 @@ TOTALS_HEADERS = [
     "s6_csps", "s6_idle", "s6_collected",
     # Added 2026-06-29 to power the dedup-based sanity floor:
     "s5_cnp_raw", "s5_dedup",
+    # Kapil 2026-09-23: persist s4a/s4b_userbase so the "Total Customers"
+    # row on Tab 5 has a D-1 value to compare against (was showing "—").
+    "s4a_userbase", "s4b_userbase",
 ]
 
 # Same as dashboard.py — keep in sync
@@ -640,12 +643,20 @@ GROUP BY 1"""
 
         _s1_live = _cohort_userbase_live(in_pipeline)
         _s3_live = _cohort_userbase_live(past_s3)
+        _s4a_live = _cohort_userbase_live(completed)
+        _s4b_live = _cohort_userbase_live(s4_partners)
         print(f"[live-formula] s1_userbase: {s1_userbase:,} -> {_s1_live:,}")
         print(f"[live-formula] s3_userbase: {s3_userbase:,} -> {_s3_live:,}")
+        print(f"[live-formula] s4a_userbase: {_s4a_live:,}")
+        print(f"[live-formula] s4b_userbase: {_s4b_live:,}")
         s1_userbase = _s1_live
         s3_userbase = _s3_live
+        s4a_userbase = _s4a_live
+        s4b_userbase = _s4b_live
     except Exception as _e:
         print(f"[live-formula] override failed ({_e}) — keeping raw formula values")
+        s4a_userbase = s4a_u1_total + s4a_u2_total
+        s4b_userbase = s4b_u1 + s4b_u2 + s4b_pending
 
     totals = {
         "s1_csps": s1_csps, "s1_userbase": s1_userbase,
@@ -667,6 +678,9 @@ GROUP BY 1"""
         # v3 sanity-floor inputs
         "s5_cnp_raw": raw_cnp,
         "s5_dedup": s5_dup,
+        # Kapil 2026-09-23: persist s4a/s4b_userbase for Tab 5 "Total Customers"
+        "s4a_userbase": s4a_userbase,
+        "s4b_userbase": s4b_userbase,
     }
 
     # ── 12. Append row ──────────────────────────────────────────────────────
