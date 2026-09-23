@@ -1987,8 +1987,8 @@ def render_tab5_funnel_with_delta(m, y, s5_freshness=None, report_date_str="",
         f"• Blocking has been completed for {m['s3_csps']:,} CSPs, covering a user base of {m['s3_userbase']:,}.",
         f"• The S4 stage has been completed for {m['s4a_csps']:,} CSPs{_delta_inline('s4a_csps')} with a user base of {s4a_userbase:,}, while {m['s4b_csps']:,} CSPs with a user base of {s4b_userbase:,} are currently in the S4 stage.",
         f"• {m['s5_csps']:,} CSPs{_delta_inline('s5_csps')} have progressed to S5, with a total Netbox liability of {m['s5_liability']:,}{_delta_inline('s5_liability')}.",
-        f"• S4 completed: Migration of {m['s4a_u1_mig']:,} of {m['s4a_u1_total']:,} U1 customers{_delta_inline('s4a_u1_mig')} with {u1_conv} conversion and {m['s4a_u2_pick']:,} of {m['s4a_u2_total']:,} U2 customers{_delta_inline('s4a_u2_pick')} Device picked up with {u2_conv} conversion for {m['s4a_csps']:,} CSPs.",
-        f"• S4 in process: Migration Done for {m['s4b_u1_mig']:,} of {m['s4b_u1']:,} U1 customers{_delta_inline('s4b_u1_mig')} and Netbox Pickup Done for {m['s4b_u2_pick']:,} of {m['s4b_u2']:,} U2 customers{_delta_inline('s4b_u2_pick')} across {m['s4b_csps']:,} CSPs.",
+        f"• S4 completed ({m['s4a_csps']:,} CSPs): {s4a_userbase:,} total customers{_delta_inline('s4a_userbase')} — Migration Done for {m['s4a_u1_mig']:,} of {m['s4a_u1_total']:,} U1{_delta_inline('s4a_u1_mig')} ({u1_conv}) and Netbox Picked for {m['s4a_u2_pick']:,} of {m['s4a_u2_total']:,} U2{_delta_inline('s4a_u2_pick')} ({u2_conv}).",
+        f"• S4 in process ({m['s4b_csps']:,} CSPs): {s4b_userbase:,} total customers{_delta_inline('s4b_userbase')} — Migration Done for {m['s4b_u1_mig']:,} of {m['s4b_u1']:,} U1{_delta_inline('s4b_u1_mig')} and Netbox Picked for {m['s4b_u2_pick']:,} of {m['s4b_u2']:,} U2{_delta_inline('s4b_u2_pick')}.",
         f"• {m['s6_csps']:,} {csp_word} has successfully reached S6 with {s6_liability_text}.",
     ]
     # Kapil 2026-09-18: keep the picked-at-stopped note in the copy-paste
